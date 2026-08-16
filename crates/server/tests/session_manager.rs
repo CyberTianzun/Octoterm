@@ -3,6 +3,26 @@ use octoterm_server::session::manager::SessionManager;
 use std::time::Duration;
 
 #[tokio::test]
+async fn fast_exiting_command_is_removed() {
+    let m = SessionManager::new(1 << 20);
+    let mut events = m.events();
+    #[cfg(unix)]
+    let cmd = Some(vec!["/bin/sh".into(), "-c".into(), "exit 0".into()]);
+    #[cfg(windows)]
+    let cmd = Some(vec!["cmd.exe".into(), "/C".into(), "exit 0".into()]);
+    let _s = m.create(None, cmd).unwrap();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        assert!(tokio::time::Instant::now() < deadline, "session was never removed");
+        match tokio::time::timeout(std::time::Duration::from_secs(1), events.recv()).await {
+            Ok(Ok(ServerMsg::SessionEvent { event: SessionEventKind::Closed, .. })) => break,
+            _ => continue,
+        }
+    }
+    assert!(m.list().is_empty());
+}
+
+#[tokio::test]
 async fn create_list_rename_kill() {
     let m = SessionManager::new(1 << 20);
     let mut events = m.events();

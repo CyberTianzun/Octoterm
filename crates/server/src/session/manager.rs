@@ -50,10 +50,14 @@ impl SessionManager {
         let watch = session.clone();
         tokio::spawn(async move {
             let mut rx = watch.subscribe();
-            loop {
-                match rx.recv().await {
-                    Ok(SessionOutput::Exited) | Err(broadcast::error::RecvError::Closed) => break,
-                    _ => continue,
+            // 极快退出的子进程可能在订阅前就广播了 Exited;
+            // has_exited 在广播前置位,订阅后补查一次即可闭合竞态
+            if !watch.has_exited() {
+                loop {
+                    match rx.recv().await {
+                        Ok(SessionOutput::Exited) | Err(broadcast::error::RecvError::Closed) => break,
+                        _ => continue,
+                    }
                 }
             }
             if mgr.sessions.lock().unwrap().remove(&id).is_some() {
