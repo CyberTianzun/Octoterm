@@ -8,6 +8,8 @@ octoterm-protocol = { path = "../protocol" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 alacritty_terminal = "0.25"
+portable-pty = "0.9"
+bytes = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
