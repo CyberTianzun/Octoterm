@@ -7,6 +7,7 @@ edition.workspace = true
 octoterm-protocol = { path = "../protocol" }
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
+alacritty_terminal = "0.25"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
