@@ -1,0 +1,13 @@
+[
+  { "type": "hello", "token": "secret", "proto": 1 },
+  { "type": "list-sessions" },
+  { "type": "new-session", "name": "work", "command": ["sh", "-c", "echo hi"] },
+  { "type": "new-session", "name": null, "command": null },
+  { "type": "kill-session", "id": 2 },
+  { "type": "rename-session", "id": 2, "name": "renamed" },
+  { "type": "preview", "id": 1 },
+  { "type": "attach", "id": 1, "channel": 1, "last_seq": 42, "cols": 80, "rows": 24 },
+  { "type": "attach", "id": 1, "channel": 2, "last_seq": null, "cols": 120, "rows": 40 },
+  { "type": "detach", "channel": 1 },
+  { "type": "resize", "channel": 1, "cols": 100, "rows": 30 }
+]

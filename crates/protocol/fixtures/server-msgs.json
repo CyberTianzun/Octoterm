@@ -1,0 +1,11 @@
+[
+  { "type": "hello-ok", "proto": 1 },
+  { "type": "error", "message": "bad token" },
+  { "type": "sessions", "sessions": [ { "id": 1, "name": "work", "cols": 80, "rows": 24, "created_at": 1755300000 } ] },
+  { "type": "session-event", "event": "created", "session": { "id": 2, "name": "octoterm-2", "cols": 80, "rows": 24, "created_at": 1755300001 } },
+  { "type": "preview-data", "id": 1, "data": "G1swbQ==" },
+  { "type": "attached", "channel": 1, "seq": 100, "mode": "replay" },
+  { "type": "resync-begin", "channel": 1 },
+  { "type": "resync-end", "channel": 1, "seq": 200 },
+  { "type": "session-exited", "channel": 1, "id": 1 }
+]
