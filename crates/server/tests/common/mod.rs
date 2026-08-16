@@ -6,9 +6,13 @@ use octoterm_server::session::manager::SessionManager;
 use tokio_tungstenite::tungstenite::Message;
 
 pub async fn start_test_server(token: &str) -> String {
+    start_test_server_with_cap(token, 1 << 20).await
+}
+
+pub async fn start_test_server_with_cap(token: &str, cap: usize) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState { manager: SessionManager::new(1 << 20), token: token.into() };
+    let state = AppState { manager: SessionManager::new(cap), token: token.into() };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
     format!("ws://{addr}/ws")
 }
