@@ -39,11 +39,25 @@ impl SessionGrid {
         (self.cols, self.rows)
     }
 
-    /// 返回 (字符, fg 调试串) 供测试比对
+    /// SGR 相关的 flags 子集：用于测试比对，避免因 WRAPLINE/WIDE_CHAR 等
+    /// 排版记账位在 roundtrip 前后合理不同而导致误判。
+    #[cfg(test)]
+    const SGR_FLAGS: Flags = Flags::BOLD
+        .union(Flags::DIM)
+        .union(Flags::ITALIC)
+        .union(Flags::UNDERLINE)
+        .union(Flags::INVERSE)
+        .union(Flags::STRIKEOUT)
+        .union(Flags::HIDDEN);
+
+    /// 返回 (字符, "fg|bg|flags" 调试串) 供测试比对
     #[cfg(test)]
     fn cell_at(&self, line: usize, col: usize) -> (char, String) {
         let cell = &self.term.grid()[Line(line as i32)][Column(col)];
-        (cell.c, format!("{:?}", cell.fg))
+        (
+            cell.c,
+            format!("{:?}|{:?}|{:?}", cell.fg, cell.bg, cell.flags & Self::SGR_FLAGS),
+        )
     }
 
     pub fn repaint(&self) -> Vec<u8> {
@@ -105,9 +119,19 @@ fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
     if flags.contains(Flags::BOLD) { parts.push("1".into()); }
     if flags.contains(Flags::DIM) { parts.push("2".into()); }
     if flags.contains(Flags::ITALIC) { parts.push("3".into()); }
-    if flags.contains(Flags::UNDERLINE) { parts.push("4".into()); }
+    // v1 起见,把所有花式下划线变体(双线/曲线/点线/虚线)都近似成普通下划线 SGR 4。
+    if flags.intersects(
+        Flags::UNDERLINE
+            | Flags::DOUBLE_UNDERLINE
+            | Flags::UNDERCURL
+            | Flags::DOTTED_UNDERLINE
+            | Flags::DASHED_UNDERLINE,
+    ) {
+        parts.push("4".into());
+    }
     if flags.contains(Flags::INVERSE) { parts.push("7".into()); }
     if flags.contains(Flags::STRIKEOUT) { parts.push("9".into()); }
+    if flags.contains(Flags::HIDDEN) { parts.push("8".into()); }
     parts.push(color_params(fg, true));
     parts.push(color_params(bg, false));
     format!("\x1b[{}m", parts.join(";"))
@@ -128,7 +152,28 @@ mod tests {
     #[test]
     fn repaint_roundtrip_preserves_content_and_color() {
         let mut a = SessionGrid::new(20, 5);
-        a.advance(b"plain \x1b[31mred\x1b[0m\r\nline2 \x1b[1;44mbold-on-blue");
+        a.advance(b"plain \x1b[31mred\x1b[0m\r\nline2 \x1b[1;44mbold-on-blue\x1b[0m\x1b[8mhidden");
+        let repaint = a.repaint();
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+
+        for line in 0..5 {
+            for col in 0..20 {
+                assert_eq!(
+                    a.cell_at(line, col),
+                    b.cell_at(line, col),
+                    "cell mismatch at {line},{col}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repaint_roundtrip_preserves_wide_chars() {
+        let mut a = SessionGrid::new(20, 5);
+        // "你好 ok" 中文宽字符 + 红色前景，行尾要覆盖 WIDE_CHAR_SPACER 跳过路径与列对齐。
+        a.advance(b"\x1b[31m\xe4\xbd\xa0\xe5\xa5\xbd ok");
         let repaint = a.repaint();
 
         let mut b = SessionGrid::new(20, 5);
