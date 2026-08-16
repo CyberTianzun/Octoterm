@@ -2,4 +2,5 @@
 node_modules/
 clients/web/dist/*
 !clients/web/dist/.gitkeep
+clients/web/test/.protocol.build.mjs
 .superpowers/
