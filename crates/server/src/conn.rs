@@ -13,6 +13,18 @@ use crate::session::pty::{Session, SessionOutput};
 
 const COALESCE_MAX: usize = 64 * 1024;
 
+/// 依据水位线裁剪广播消息:去掉已经通过 replay/resync 送达客户端的前缀。
+/// 返回需要发送的字节(None = 整条已覆盖);推进水位线到 end_seq。
+fn trim_by_watermark(watermark: &mut u64, end_seq: u64, bytes: &[u8]) -> Option<Vec<u8>> {
+    let start = end_seq.saturating_sub(bytes.len() as u64);
+    if end_seq <= *watermark {
+        return None; // 完全在已送达范围内,水位线不动
+    }
+    let skip = watermark.saturating_sub(start) as usize;
+    *watermark = end_seq;
+    Some(bytes[skip..].to_vec())
+}
+
 pub(crate) fn control_frame(msg: &ServerMsg) -> Message {
     Message::Binary(Frame::new(CONTROL_CHANNEL, serde_json::to_vec(msg).unwrap()).encode().into())
 }
@@ -155,13 +167,14 @@ async fn handle_control(
                 None => (AttachMode::Resync, 0), // resync 的权威 seq 在 ResyncEnd 里
             };
             let _ = out.send(control_frame(&ServerMsg::Attached { channel, seq, mode })).await;
-            match replay {
-                Some((_, bytes)) => {
+            let watermark = match replay {
+                Some((end_seq, bytes)) => {
                     if !bytes.is_empty() {
                         let _ = out
                             .send(Message::Binary(Frame::new(channel, bytes).encode().into()))
                             .await;
                     }
+                    end_seq
                 }
                 None => {
                     let snap = session.snapshot();
@@ -172,10 +185,12 @@ async fn handle_control(
                     let _ = out
                         .send(control_frame(&ServerMsg::ResyncEnd { channel, seq: snap.end_seq }))
                         .await;
+                    snap.end_seq
                 }
-            }
+            };
 
-            let pump = tokio::spawn(pump_output(channel, id, session.clone(), rx, out.clone()));
+            let pump =
+                tokio::spawn(pump_output(channel, id, session.clone(), rx, out.clone(), watermark));
             conn.attachments.insert(channel, Attachment { session, pump });
         }
         ClientMsg::Detach { channel } => match conn.attachments.remove(&channel) {
@@ -197,17 +212,35 @@ async fn pump_output(
     session: Arc<Session>,
     mut rx: tokio::sync::broadcast::Receiver<SessionOutput>,
     out: mpsc::Sender<Message>,
+    mut watermark: u64,
 ) {
     use tokio::sync::broadcast::error::{RecvError, TryRecvError};
     loop {
         match rx.recv().await {
-            Ok(SessionOutput::Data { bytes, .. }) => {
-                // 合帧:非阻塞追加积压数据,上限 64 KiB
-                let mut buf = bytes.to_vec();
+            Ok(SessionOutput::Data { end_seq, bytes }) => {
+                // 合帧:非阻塞追加积压数据,单帧不超过 64 KiB;每条消息先过水位线去重
+                let mut buf = trim_by_watermark(&mut watermark, end_seq, &bytes).unwrap_or_default();
                 let mut exited = false;
-                while buf.len() < COALESCE_MAX {
+                loop {
                     match rx.try_recv() {
-                        Ok(SessionOutput::Data { bytes, .. }) => buf.extend_from_slice(&bytes),
+                        Ok(SessionOutput::Data { end_seq, bytes }) => {
+                            let Some(trimmed) = trim_by_watermark(&mut watermark, end_seq, &bytes)
+                            else {
+                                continue;
+                            };
+                            if !buf.is_empty()
+                                && buf.len() + trimmed.len() > COALESCE_MAX
+                                && out
+                                    .send(Message::Binary(
+                                        Frame::new(channel, std::mem::take(&mut buf)).encode().into(),
+                                    ))
+                                    .await
+                                    .is_err()
+                            {
+                                return;
+                            }
+                            buf.extend_from_slice(&trimmed);
+                        }
                         Ok(SessionOutput::Exited) => {
                             exited = true;
                             break;
@@ -216,7 +249,12 @@ async fn pump_output(
                         Err(TryRecvError::Lagged(_)) => break, // 下轮 recv 处理
                     }
                 }
-                if out.send(Message::Binary(Frame::new(channel, buf).encode().into())).await.is_err() {
+                if !buf.is_empty()
+                    && out
+                        .send(Message::Binary(Frame::new(channel, buf).encode().into()))
+                        .await
+                        .is_err()
+                {
                     return;
                 }
                 if exited {
@@ -263,8 +301,41 @@ async fn pump_output(
                 let _ = out
                     .send(control_frame(&ServerMsg::ResyncEnd { channel, seq: snap.end_seq }))
                     .await;
+                watermark = snap.end_seq;
             }
             Err(RecvError::Closed) => return,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::trim_by_watermark;
+
+    #[test]
+    fn fully_covered_message_returns_none_and_leaves_watermark() {
+        let mut watermark = 100u64;
+        let bytes = b"hello".to_vec(); // covers [95, 100)
+        let out = trim_by_watermark(&mut watermark, 100, &bytes);
+        assert_eq!(out, None);
+        assert_eq!(watermark, 100);
+    }
+
+    #[test]
+    fn partially_covered_message_trims_prefix_and_advances_watermark() {
+        let mut watermark = 3u64;
+        let bytes = b"abcde".to_vec(); // covers [0, 5); watermark at 3 means [0,3) already delivered
+        let out = trim_by_watermark(&mut watermark, 5, &bytes);
+        assert_eq!(out, Some(b"de".to_vec()));
+        assert_eq!(watermark, 5);
+    }
+
+    #[test]
+    fn fully_new_message_passes_through_whole_and_advances_watermark() {
+        let mut watermark = 0u64;
+        let bytes = b"xyz".to_vec(); // covers [0, 3), nothing delivered yet
+        let out = trim_by_watermark(&mut watermark, 3, &bytes);
+        assert_eq!(out, Some(b"xyz".to_vec()));
+        assert_eq!(watermark, 3);
     }
 }
