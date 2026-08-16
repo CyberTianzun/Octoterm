@@ -47,8 +47,17 @@ pub enum ServerMsg {
     SessionEvent { event: SessionEventKind, session: SessionInfo },
     /// data = base64 编码的 ANSI 重绘序列
     PreviewData { id: u64, data: String },
+    /// seq 记账不变式(客户端必须遵守):
+    ///
+    /// 客户端只能从控制消息锚定 `last_seq` —— 要么是 `mode: Replay` 时自己发出的
+    /// `last_seq`(重放数据不改变这个锚点,因为重放的字节本就是从该点续接的),
+    /// 要么是 `ResyncEnd.seq`;此后每收到一条数据帧,把它的字节长度累加到
+    /// `last_seq` 上。`Attached.seq` 只是"重放会在哪个 seq 结束"的参考信息,
+    /// 绝不能被客户端当作锚点使用 —— 用它会与按字节推进的账本重复计数。
     Attached { channel: u32, seq: u64, mode: AttachMode },
     ResyncBegin { channel: u32 },
+    /// resync 的权威锚点:重绘(repaint)字节是合成的,不计入 seq 账本;
+    /// 客户端收到本消息后应把 `last_seq` 直接置为 `seq`,此后按数据帧字节长度累加。
     ResyncEnd { channel: u32, seq: u64 },
     SessionExited { channel: u32, id: u64 },
 }

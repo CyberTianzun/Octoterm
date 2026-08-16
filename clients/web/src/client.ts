@@ -80,7 +80,9 @@ export class OctoClient {
         break;
       }
       case "attached":
-        if (msg.mode === "replay") this.trackSeq(msg.channel, msg.seq);
+        // Attached.seq 只是"重放结束点"的信息量,不是锚点:重放模式下 lastSeq
+        // 已经等于本端发出的 last_seq(重连恢复点),后续 noteData 按字节推进即可。
+        // 绝不能在这里用 msg.seq 覆盖 lastSeq —— 见 OctoClient 类上方的 seq 记账不变式注释。
         break;
       case "resync-end":
         this.trackSeq(msg.channel, msg.seq);
@@ -107,8 +109,10 @@ export class OctoClient {
     this.send({ type: "attach", id: sessionId, channel, last_seq: null, cols, rows });
   }
 
-  /** 服务端 Data 帧没带 seq(裸字节),客户端以 resync-end/attached 的 seq 为锚点,
-   *  其后每收到 n 字节 lastSeq += n —— 与服务端 end_seq 一致,因为流是连续的。 */
+  /** 服务端 Data 帧没带 seq(裸字节)。lastSeq 只能从控制消息锚定:要么是
+   *  Attached{mode:replay} 时本端自己发出的 last_seq(重放字节从该点续接,不
+   *  需要、也不应该用 Attached.seq 去覆盖它),要么是 ResyncEnd.seq(resync 的
+   *  重绘字节是合成的,不计入账本)。锚定之后,每收到 n 字节 lastSeq += n。 */
   noteData(channel: number, byteLen: number) {
     const a = this.attachments.get(channel);
     if (a && a.lastSeq !== null) a.lastSeq += byteLen;
