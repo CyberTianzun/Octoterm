@@ -19,7 +19,10 @@ pub struct AppState {
 }
 
 pub fn router(state: AppState) -> Router {
-    Router::new().route("/ws", any(ws_handler)).with_state(state)
+    Router::new()
+        .route("/ws", any(ws_handler))
+        .fallback(crate::assets::static_handler)
+        .with_state(state)
 }
 
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow::Result<()> {

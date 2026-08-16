@@ -67,3 +67,11 @@ async fn generated_config_is_owner_only() {
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
     assert_eq!(mode, 0o600);
 }
+
+#[tokio::test]
+async fn serves_embedded_index() {
+    let url = start_test_server("t").await; // ws://addr/ws
+    let http = url.replace("ws://", "http://").replace("/ws", "/");
+    let body = reqwest::get(&http).await.unwrap().text().await.unwrap();
+    assert!(body.contains("octoterm"));
+}
