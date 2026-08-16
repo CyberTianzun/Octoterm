@@ -1,11 +1,20 @@
 use octoterm_server::session::pty::{Session, SessionOutput};
 use std::time::Duration;
 
+// 延迟输出,保证测试先完成 subscribe(真实消费者 attach 时同样先订阅再快照)
 fn echo_cmd(text: &str) -> Option<Vec<String>> {
     #[cfg(unix)]
-    return Some(vec!["/bin/sh".into(), "-c".into(), format!("printf '{text}'")]);
+    return Some(vec![
+        "/bin/sh".into(),
+        "-c".into(),
+        format!("sleep 0.3; printf '{text}'"),
+    ]);
     #[cfg(windows)]
-    return Some(vec!["cmd.exe".into(), "/C".into(), format!("echo {text}")]);
+    return Some(vec![
+        "powershell.exe".into(),
+        "-Command".into(),
+        format!("Start-Sleep -Milliseconds 300; Write-Host {text}"),
+    ]);
 }
 
 async fn collect_until_exit(session: &Session) -> Vec<u8> {

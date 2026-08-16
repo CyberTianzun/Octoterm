@@ -98,7 +98,9 @@ impl Session {
             let mut buf = [0u8; 8192];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => break,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
                     Ok(n) => {
                         let end_seq = {
                             let mut shared = s.shared.lock().unwrap();
