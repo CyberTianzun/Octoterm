@@ -68,3 +68,23 @@ async fn config_generates_and_persists_token() {
     let c2 = octoterm_server::config::Config::load_or_init(Some(path)).unwrap();
     assert_eq!(c1.token, c2.token);
 }
+
+#[tokio::test]
+async fn non_binary_first_frame_gets_error_reply() {
+    let url = start_test_server("s3cret").await;
+    let (mut ws, _) = tokio_tungstenite::connect_async(&url).await.unwrap();
+    ws.send(Message::Text("hi".into())).await.unwrap();
+    let (_, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
+    assert!(matches!(msg.unwrap(), ServerMsg::Error { .. }));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn generated_config_is_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    octoterm_server::config::Config::load_or_init(Some(path.clone())).unwrap();
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
+}

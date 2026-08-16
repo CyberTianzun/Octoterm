@@ -10,6 +10,7 @@ use futures_util::SinkExt;
 use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
 
 use crate::session::manager::SessionManager;
+use tokio::time::timeout;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -37,8 +38,13 @@ pub(crate) fn control_msg(msg: &ServerMsg) -> Message {
 }
 
 async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
-    let first = tokio::time::timeout(Duration::from_secs(5), socket.recv()).await;
-    let Ok(Some(Ok(Message::Binary(data)))) = first else { return false };
+    let first = timeout(Duration::from_secs(5), socket.recv()).await;
+    let data = match first {
+        Err(_) => return reject(socket, "hello timeout").await,
+        Ok(None) | Ok(Some(Err(_))) => return false, // 连接已断,无处可回
+        Ok(Some(Ok(Message::Binary(data)))) => data,
+        Ok(Some(Ok(_))) => return reject(socket, "expected binary hello frame").await,
+    };
     let hello = Frame::decode(&data)
         .ok()
         .filter(|f| f.channel == CONTROL_CHANNEL)
@@ -50,13 +56,13 @@ async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
             let _ = socket.send(control_msg(&ServerMsg::HelloOk { proto: PROTO_VERSION })).await;
             true
         }
-        _ => {
-            let _ = socket
-                .send(control_msg(&ServerMsg::Error { message: "bad hello".into() }))
-                .await;
-            false
-        }
+        _ => reject(socket, "bad hello").await,
     }
+}
+
+async fn reject(socket: &mut WebSocket, message: &str) -> bool {
+    let _ = socket.send(control_msg(&ServerMsg::Error { message: message.into() })).await;
+    false
 }
 
 async fn handle_socket(mut socket: WebSocket, state: AppState) -> anyhow::Result<()> {
