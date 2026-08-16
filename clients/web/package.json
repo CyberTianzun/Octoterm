@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "esbuild src/main.ts --bundle --outfile=dist/app.js --format=esm && node scripts/copy-static.mjs",
+    "build": "esbuild src/main.ts --bundle --outfile=dist/app.js --format=esm --loader:.css=css && node scripts/copy-static.mjs",
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
