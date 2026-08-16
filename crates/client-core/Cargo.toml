@@ -4,4 +4,4 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-octoterm-protocol = { path = "../protocol" }
+# 目前 lib.rs 尚未直接用到协议类型;真正需要时再加回来。
