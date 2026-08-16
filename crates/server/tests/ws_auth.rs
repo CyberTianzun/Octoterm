@@ -75,3 +75,24 @@ async fn serves_embedded_index() {
     let body = reqwest::get(&http).await.unwrap().text().await.unwrap();
     assert!(body.contains("octoterm"));
 }
+
+#[tokio::test]
+async fn serves_named_asset_with_correct_mime() {
+    let url = start_test_server("t").await;
+    let http = url.replace("ws://", "http://").replace("/ws", "/style.css");
+    let resp = reqwest::get(&http).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(ct.starts_with("text/css"), "got {ct}");
+}
+
+#[tokio::test]
+async fn fallback_serves_index_html_mime() {
+    let url = start_test_server("t").await;
+    let http = url.replace("ws://", "http://").replace("/ws", "/missing.png");
+    let resp = reqwest::get(&http).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let ct = resp.headers()["content-type"].to_str().unwrap().to_string();
+    assert!(ct.starts_with("text/html"), "got {ct}");
+    assert!(resp.text().await.unwrap().contains("octoterm"));
+}
