@@ -1,0 +1,96 @@
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
+
+use anyhow::Result;
+use octoterm_protocol::{ServerMsg, SessionEventKind, SessionInfo};
+use tokio::sync::broadcast;
+
+use super::pty::{Session, SessionOutput};
+
+pub struct SessionManager {
+    buffer_cap: usize,
+    next_id: AtomicU64,
+    sessions: Mutex<HashMap<u64, Arc<Session>>>,
+    events: broadcast::Sender<ServerMsg>,
+}
+
+impl SessionManager {
+    pub fn new(buffer_cap: usize) -> Arc<Self> {
+        let (events, _) = broadcast::channel(64);
+        Arc::new(Self {
+            buffer_cap,
+            next_id: AtomicU64::new(1),
+            sessions: Mutex::new(HashMap::new()),
+            events,
+        })
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<ServerMsg> {
+        self.events.subscribe()
+    }
+
+    fn emit(&self, event: SessionEventKind, session: SessionInfo) {
+        let _ = self.events.send(ServerMsg::SessionEvent { event, session });
+    }
+
+    pub fn create(
+        self: &Arc<Self>,
+        name: Option<String>,
+        command: Option<Vec<String>>,
+    ) -> Result<Arc<Session>> {
+        let id = self.next_id.fetch_add(1, Ordering::SeqCst);
+        let name = name.unwrap_or_else(|| format!("octoterm-{id}"));
+        let session = Session::spawn(id, name, 80, 24, command, self.buffer_cap)?;
+        self.sessions.lock().unwrap().insert(id, session.clone());
+        self.emit(SessionEventKind::Created, session.info());
+
+        // 监视退出:自动移除 + Closed 事件
+        let mgr = self.clone();
+        let watch = session.clone();
+        tokio::spawn(async move {
+            let mut rx = watch.subscribe();
+            loop {
+                match rx.recv().await {
+                    Ok(SessionOutput::Exited) | Err(broadcast::error::RecvError::Closed) => break,
+                    _ => continue,
+                }
+            }
+            if mgr.sessions.lock().unwrap().remove(&id).is_some() {
+                mgr.emit(SessionEventKind::Closed, watch.info());
+            }
+        });
+        Ok(session)
+    }
+
+    pub fn get(&self, id: u64) -> Option<Arc<Session>> {
+        self.sessions.lock().unwrap().get(&id).cloned()
+    }
+
+    pub fn list(&self) -> Vec<SessionInfo> {
+        let mut v: Vec<_> = self.sessions.lock().unwrap().values().map(|s| s.info()).collect();
+        v.sort_by_key(|s| s.id);
+        v
+    }
+
+    pub fn kill(&self, id: u64) -> bool {
+        match self.get(id) {
+            Some(s) => {
+                s.kill();
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn rename(&self, id: u64, name: &str) -> bool {
+        match self.get(id) {
+            Some(s) => {
+                s.rename(name);
+                self.emit(SessionEventKind::Renamed, s.info());
+                true
+            }
+            None => false,
+        }
+    }
+}
