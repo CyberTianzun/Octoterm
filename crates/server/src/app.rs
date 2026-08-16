@@ -70,11 +70,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) -> anyhow::Result
         let _ = socket.close().await;
         return Ok(());
     }
-    // Task 8 在此接管连接主循环;当前先拒绝一切后续消息
-    while let Some(Ok(_)) = socket.recv().await {
-        let _ = socket
-            .send(control_msg(&ServerMsg::Error { message: "not implemented".into() }))
-            .await;
-    }
+    crate::conn::run(socket, state).await;
     Ok(())
 }
