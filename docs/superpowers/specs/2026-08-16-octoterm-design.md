@@ -76,12 +76,11 @@ Rust GUI 客户端本体是后续独立项目,不在 v1,但协议与 client-core
 
 ### 控制消息(channel 0,JSON)
 
-- 会话 CRUD:`list-sessions`、`new-session`、`kill-session`、`rename-session`;
+- 会话 CRUD:`list-sessions`、`new-session`(可选 `command` argv,缺省为默认 shell)、`kill-session`、`rename-session`;
 - `preview`:不 attach 的前提下获取某会话当前屏幕的重绘序列(会话列表页的卡片预览用);
 - 生命周期:`attach`(分配 channel id,携带 `last_seq` 供续接)、`detach`、`resize {cols, rows}`;
 - 服务端推送:会话增删改事件(会话列表保持活的)、`resync-begin`/`resync-end` 边界标记、会话退出通知;
-- 流控:按 channel 的 credit 授予与消耗汇报;
-- 握手:鉴权(bearer token)与协议版本协商。
+- 握手:连接后第一条消息必须是 `hello`(携带 token 与协议版本),校验失败即断开。浏览器 WebSocket 无法自定义 header,故 token 走带内握手;静态资源不含秘密,不设防。
 
 控制流量极小,JSON 换取 TS 端零成本解析;性能敏感路径(终端 IO)上没有 JSON。
 
@@ -100,7 +99,7 @@ Rust GUI 客户端本体是后续独立项目,不在 v1,但协议与 client-core
 
 - **正常路径**:原始字节流直达客户端;输出按 ~16ms 定时或缓冲阈值合帧,突发输出(如 `cat` 大文件)不会产生帧洪流;
 - **断线重连**:客户端指数退避自动重连,`attach` 携带 `last_seq`;缺失区间在环形缓冲内 → 补发缺失字节(无缝);超出 → grid 重绘 resync(瞬间恢复现场,mosh 式有损恢复);
-- **背压**:客户端落后超过 credit 窗口时,服务端停发该 channel 的原始流(中间字节丢弃,grid 照常消费 pty),客户端追上后直接 resync 到最新画面。弱网客户端永远只落后「一屏」,不会被字节洪流压垮;
+- **背压**:不引入显式 credit 消息。每会话输出走有界广播队列,每连接的发送受 WebSocket/TCP 背压;慢客户端导致队列 lag 时,服务端丢弃其错过的字节(grid 照常消费 pty),随后直接 resync 到最新画面。弱网客户端永远只落后「一屏」,不会被字节洪流压垮;
 - **滚动历史**:正常流下由客户端本地积累;resync 是有损恢复,历史出现断点为接受的取舍(服务端回滚补页留给 v2)。
 
 ## 跨平台
@@ -121,7 +120,7 @@ Rust GUI 客户端本体是后续独立项目,不在 v1,但协议与 client-core
 
 ## 安全
 
-- bearer token:配置文件指定或首次启动生成打印;所有 HTTP/WS 请求握手校验;
+- bearer token:配置文件指定或首次启动生成打印;WebSocket 连接经 `hello` 带内握手校验,失败即断开(静态资源不含秘密,公开);
 - 默认只监听 `127.0.0.1`,对外监听需显式配置;文档引导 Tailscale / 反向代理加 TLS;
 - TLS 终结不进 daemon。
 
