@@ -38,7 +38,8 @@ function renderList() {
         <button data-act="rename">Rename</button>
         <button data-act="kill">Kill</button>
         <button data-act="attach">Attach</button></div>`;
-    card.querySelector(".name")!.textContent = `${s.name} · ${s.cols}×${s.rows}`;
+    const created = new Date(s.created_at * 1000).toLocaleString();
+    card.querySelector(".name")!.textContent = `${s.name} · ${s.cols}×${s.rows} · ${created}`;
     const preview = new Terminal({ cols: s.cols, rows: s.rows, disableStdin: true, fontSize: 6 });
     preview.open(card.querySelector(".preview") as HTMLElement);
     previews.set(s.id, preview);
