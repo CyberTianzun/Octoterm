@@ -29,6 +29,36 @@ pub(crate) fn control_frame(msg: &ServerMsg) -> Message {
     Message::Binary(Frame::new(CONTROL_CHANNEL, serde_json::to_vec(msg).unwrap()).encode().into())
 }
 
+/// 发送一次完整的 resync:快照 → ResyncBegin → 重绘帧 → ResyncEnd{seq},
+/// 并把水位线推进到快照的 end_seq。任意一步发送失败则返回 false(调用方应结束泵)。
+async fn send_resync(
+    session: &Arc<Session>,
+    channel: u32,
+    out: &mpsc::Sender<Message>,
+    watermark: &mut u64,
+) -> bool {
+    let snap = session.snapshot();
+    if out.send(control_frame(&ServerMsg::ResyncBegin { channel })).await.is_err() {
+        return false;
+    }
+    if out
+        .send(Message::Binary(Frame::new(channel, snap.repaint).encode().into()))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    if out
+        .send(control_frame(&ServerMsg::ResyncEnd { channel, seq: snap.end_seq }))
+        .await
+        .is_err()
+    {
+        return false;
+    }
+    *watermark = snap.end_seq;
+    true
+}
+
 struct Attachment {
     session: Arc<Session>,
     pump: tokio::task::JoinHandle<()>,
@@ -221,6 +251,9 @@ async fn pump_output(
                 // 合帧:非阻塞追加积压数据,单帧不超过 64 KiB;每条消息先过水位线去重
                 let mut buf = trim_by_watermark(&mut watermark, end_seq, &bytes).unwrap_or_default();
                 let mut exited = false;
+                // tokio broadcast 只报告一次 Lagged:下一轮 try_recv()/recv() 会
+                // 直接跳到间隙之后的数据,若不在这里显式 resync 就会静默丢字节。
+                let mut lagged = false;
                 loop {
                     match rx.try_recv() {
                         Ok(SessionOutput::Data { end_seq, bytes }) => {
@@ -246,7 +279,10 @@ async fn pump_output(
                             break;
                         }
                         Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
-                        Err(TryRecvError::Lagged(_)) => break, // 下轮 recv 处理
+                        Err(TryRecvError::Lagged(_)) => {
+                            lagged = true;
+                            break;
+                        }
                     }
                 }
                 if !buf.is_empty()
@@ -262,6 +298,29 @@ async fn pump_output(
                         .send(control_frame(&ServerMsg::SessionExited { channel, id: session_id }))
                         .await;
                     return;
+                }
+                if lagged {
+                    // 排空剩余积压(非阻塞,与下方 outer Lagged 分支同语义):
+                    // 途中遇到 Exited 直接通知退出并结束泵,不再走 resync。
+                    loop {
+                        match rx.try_recv() {
+                            Ok(SessionOutput::Exited) => {
+                                let _ = out
+                                    .send(control_frame(&ServerMsg::SessionExited {
+                                        channel,
+                                        id: session_id,
+                                    }))
+                                    .await;
+                                return;
+                            }
+                            Ok(SessionOutput::Data { .. }) => continue,
+                            Err(TryRecvError::Lagged(_)) => continue,
+                            Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
+                        }
+                    }
+                    if !send_resync(&session, channel, &out, &mut watermark).await {
+                        return;
+                    }
                 }
             }
             Ok(SessionOutput::Exited) => {
@@ -289,19 +348,9 @@ async fn pump_output(
                         Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
                     }
                 }
-                let snap = session.snapshot();
-                let _ = out.send(control_frame(&ServerMsg::ResyncBegin { channel })).await;
-                if out
-                    .send(Message::Binary(Frame::new(channel, snap.repaint).encode().into()))
-                    .await
-                    .is_err()
-                {
+                if !send_resync(&session, channel, &out, &mut watermark).await {
                     return;
                 }
-                let _ = out
-                    .send(control_frame(&ServerMsg::ResyncEnd { channel, seq: snap.end_seq }))
-                    .await;
-                watermark = snap.end_seq;
             }
             Err(RecvError::Closed) => return,
         }
