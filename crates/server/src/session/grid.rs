@@ -60,6 +60,11 @@ impl SessionGrid {
         )
     }
 
+    #[cfg(test)]
+    fn mode(&self) -> TermMode {
+        *self.term.mode()
+    }
+
     pub fn repaint(&self) -> Vec<u8> {
         let mut out = String::from("\x1b[0m\x1b[?25l\x1b[2J\x1b[H");
         let grid = self.term.grid();
@@ -84,6 +89,35 @@ impl SessionGrid {
         out.push_str(&format!("\x1b[{};{}H", cursor.line.0 + 1, cursor.column.0 + 1));
         if self.term.mode().contains(TermMode::SHOW_CURSOR) {
             out.push_str("\x1b[?25h");
+        }
+        // 恢复常用终端模式,让重连后的应用(vim/less/tmux 等)不必自己重新
+        // 设置就能继续正常工作。v1 已知限制:不恢复 alt-screen 与滚动区域
+        // (DECSTBM)——见 README「已知限制」一节,应用可在弱网重连后按
+        // Ctrl-L 或自行触发重绘来兜底。
+        let mode = self.term.mode();
+        if mode.contains(TermMode::APP_CURSOR) {
+            out.push_str("\x1b[?1h");
+        }
+        if mode.contains(TermMode::APP_KEYPAD) {
+            out.push_str("\x1b=");
+        }
+        if mode.contains(TermMode::BRACKETED_PASTE) {
+            out.push_str("\x1b[?2004h");
+        }
+        if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            out.push_str("\x1b[?1000h");
+        }
+        if mode.contains(TermMode::MOUSE_DRAG) {
+            out.push_str("\x1b[?1002h");
+        }
+        if mode.contains(TermMode::MOUSE_MOTION) {
+            out.push_str("\x1b[?1003h");
+        }
+        if mode.contains(TermMode::SGR_MOUSE) {
+            out.push_str("\x1b[?1006h");
+        }
+        if mode.contains(TermMode::UTF8_MOUSE) {
+            out.push_str("\x1b[?1005h");
         }
         out.into_bytes()
     }
@@ -196,5 +230,35 @@ mod tests {
         a.advance(b"abc\x1b[3;4H"); // 光标移到 3 行 4 列
         let repaint = String::from_utf8(a.repaint()).unwrap();
         assert!(repaint.ends_with("\x1b[3;4H\x1b[?25h"), "got tail: {:?}", &repaint[repaint.len().saturating_sub(24)..]);
+    }
+
+    #[test]
+    fn repaint_restores_terminal_modes() {
+        let mut a = SessionGrid::new(20, 5);
+        // 括号粘贴 + 应用光标键
+        a.advance(b"\x1b[?2004h\x1b[?1h");
+        assert!(a.mode().contains(TermMode::BRACKETED_PASTE));
+        assert!(a.mode().contains(TermMode::APP_CURSOR));
+        let repaint = a.repaint();
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+
+        assert!(b.mode().contains(TermMode::BRACKETED_PASTE), "mode: {:?}", b.mode());
+        assert!(b.mode().contains(TermMode::APP_CURSOR), "mode: {:?}", b.mode());
+    }
+
+    #[test]
+    fn repaint_restores_mouse_reporting_modes() {
+        let mut a = SessionGrid::new(20, 5);
+        // SGR 扩展坐标 + 任意动作鼠标上报(隐含 click/drag/motion)
+        a.advance(b"\x1b[?1006h\x1b[?1003h");
+        let repaint = a.repaint();
+
+        let mut b = SessionGrid::new(20, 5);
+        b.advance(&repaint);
+
+        assert!(b.mode().contains(TermMode::SGR_MOUSE), "mode: {:?}", b.mode());
+        assert!(b.mode().contains(TermMode::MOUSE_MOTION), "mode: {:?}", b.mode());
     }
 }

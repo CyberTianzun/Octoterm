@@ -24,3 +24,8 @@ cargo run -p octoterm-server
 - `crates/server` — daemon:pty、服务端 grid、WebSocket
 - `crates/client-core` — Rust 客户端复用逻辑
 - `clients/web` — 参考客户端(TS + xterm.js)
+
+## 已知限制
+
+resync 恢复内容、光标与常用模式(应用光标键/括号粘贴/鼠标上报),不恢复
+alt-screen 与滚动区域(DECSTBM);弱网重连后全屏应用建议 Ctrl-L 或触发重绘。
