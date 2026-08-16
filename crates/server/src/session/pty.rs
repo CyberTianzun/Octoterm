@@ -70,6 +70,11 @@ impl Session {
         if let Ok(home) = std::env::var("HOME") {
             cmd.cwd(home);
         }
+        // 客户端渲染器统一是 xterm 类(见 clients/web,基于 xterm.js),明确告知
+        // shell/应用它能力所及,而不是继承宿主进程的 TERM(可能是别的终端类型
+        // 或压根没设置),避免颜色/能力探测出错。
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
         let mut child = pty.slave.spawn_command(cmd)?;
         drop(pty.slave);
         let killer = child.clone_killer();
