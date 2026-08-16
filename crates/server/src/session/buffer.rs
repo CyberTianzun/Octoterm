@@ -72,4 +72,15 @@ mod tests {
         assert_eq!(b.read_from(6).unwrap(), b"6789");
         assert_eq!(b.read_from(5), None);
     }
+
+    #[test]
+    fn partial_overflow_evicts_oldest() {
+        let mut b = SeqBuffer::new(8);
+        b.append(b"abcdef"); // 6 bytes, fits
+        b.append(b"ghij");   // 10 total -> evict oldest 2, keeps "cdefghij"
+        assert_eq!(b.end_seq(), 10);
+        assert_eq!(b.start_seq(), 2);
+        assert_eq!(b.read_from(2).unwrap(), b"cdefghij");
+        assert_eq!(b.read_from(1), None);
+    }
 }
