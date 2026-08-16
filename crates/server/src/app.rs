@@ -64,7 +64,7 @@ async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
 }
 
 async fn reject(socket: &mut WebSocket, message: &str) -> bool {
-    let _ = socket.send(control_msg(&ServerMsg::Error { message: message.into() })).await;
+    let _ = socket.send(control_msg(&ServerMsg::Error { message: message.into(), channel: None })).await;
     false
 }
 

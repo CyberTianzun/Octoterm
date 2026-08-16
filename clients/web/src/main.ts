@@ -103,6 +103,10 @@ client.onOpen = () => {
 client.onReconnecting = () => {
   $("reconnect-banner").hidden = false;
 };
+client.onFatal = (message) => {
+  $("reconnect-banner").textContent = `连接失败: ${message} — 刷新页面重新输入 token`;
+  $("reconnect-banner").hidden = false;
+};
 client.onChannelData = (channel, payload) => {
   if (channel === TERM_CHANNEL && term) {
     term.write(payload);
@@ -131,6 +135,9 @@ client.onControl = (msg) => {
       break;
     case "error":
       console.warn("octoterm error:", msg.message);
+      // 重连打到一个已经不存在的会话上(channel 对应的 attach 失败):
+      // 该终端页面已经没有意义,关掉退回列表,而不是停留在一个死连接上。
+      if (msg.channel === TERM_CHANNEL && attachedId !== null) closeTerminal();
       break;
   }
 };

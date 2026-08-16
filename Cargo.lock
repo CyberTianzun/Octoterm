@@ -929,9 +929,6 @@ dependencies = [
 [[package]]
 name = "octoterm-client-core"
 version = "0.1.0"
-dependencies = [
- "octoterm-protocol",
-]
 
 [[package]]
 name = "octoterm-protocol"

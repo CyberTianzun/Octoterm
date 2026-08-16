@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket};
 use base64::Engine;
@@ -103,10 +104,32 @@ pub async fn run(socket: WebSocket, state: AppState) {
     let _ = writer.await;
 }
 
+const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const READ_TIMEOUT: Duration = Duration::from_secs(90);
+
+/// 每 30s 主动发一个 Ping,让中间的代理/负载均衡不至于因为连接"看起来空闲"
+/// 而把它掐断;同时给 read_loop 的 90s 超时判活打个底(客户端的 Pong 会重置
+/// 那个超时——见 read_loop 的注释)。
 async fn write_loop(mut sink: SplitSink<WebSocket, Message>, mut rx: mpsc::Receiver<Message>) {
-    while let Some(msg) = rx.recv().await {
-        if sink.send(msg).await.is_err() {
-            break;
+    let mut keepalive =
+        tokio::time::interval_at(tokio::time::Instant::now() + KEEPALIVE_INTERVAL, KEEPALIVE_INTERVAL);
+    loop {
+        tokio::select! {
+            msg = rx.recv() => {
+                match msg {
+                    Some(msg) => {
+                        if sink.send(msg).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                }
+            }
+            _ = keepalive.tick() => {
+                if sink.send(Message::Ping(Vec::new().into())).await.is_err() {
+                    break;
+                }
+            }
         }
     }
     let _ = sink.close().await;
@@ -118,7 +141,14 @@ async fn read_loop(
     out: &mpsc::Sender<Message>,
     conn: &mut ConnState,
 ) {
-    while let Some(Ok(msg)) = stream.next().await {
+    loop {
+        // 90s 内一帧都没收到(包括 Pong)就认为连接已经死了:pumps 由 run()
+        // 里既有的清理逻辑负责收尾,这里只需要退出、让上层做 abort/drop。
+        let next = match tokio::time::timeout(READ_TIMEOUT, stream.next()).await {
+            Ok(next) => next,
+            Err(_) => break,
+        };
+        let Some(Ok(msg)) = next else { break };
         let Message::Binary(data) = msg else { continue };
         let Ok(frame) = Frame::decode(&data) else { continue };
         if frame.channel == CONTROL_CHANNEL {
@@ -130,17 +160,25 @@ async fn read_loop(
             match conn.attachments.get(&frame.channel) {
                 Some(a) => {
                     if a.session.write_input(&frame.payload).is_err() {
-                        send_err(out, "session input failed").await;
+                        send_err_ch(out, "session input failed", frame.channel).await;
                     }
                 }
-                None => send_err(out, "no such channel").await,
+                None => send_err_ch(out, "no such channel", frame.channel).await,
             }
         }
     }
 }
 
 async fn send_err(out: &mpsc::Sender<Message>, message: &str) {
-    let _ = out.send(control_frame(&ServerMsg::Error { message: message.into() })).await;
+    let _ = out.send(control_frame(&ServerMsg::Error { message: message.into(), channel: None })).await;
+}
+
+/// 带 channel 上下文的错误:attach/detach/resize/input 失败时用这个,
+/// 客户端才能把错误关联到具体的 channel(比如据此关闭对应的终端页面)。
+async fn send_err_ch(out: &mpsc::Sender<Message>, message: &str, channel: u32) {
+    let _ = out
+        .send(control_frame(&ServerMsg::Error { message: message.into(), channel: Some(channel) }))
+        .await;
 }
 
 async fn handle_control(
@@ -182,10 +220,10 @@ async fn handle_control(
         },
         ClientMsg::Attach { id, channel, last_seq, cols, rows } => {
             if channel == CONTROL_CHANNEL || conn.attachments.contains_key(&channel) {
-                return send_err(out, "channel unavailable").await;
+                return send_err_ch(out, "channel unavailable", channel).await;
             }
             let Some(session) = state.manager.get(id) else {
-                return send_err(out, "no such session").await;
+                return send_err_ch(out, "no such session", channel).await;
             };
             let rx = session.subscribe(); // 先订阅再快照,不丢中间字节
             let _ = session.resize(cols, rows);
@@ -225,13 +263,13 @@ async fn handle_control(
         }
         ClientMsg::Detach { channel } => match conn.attachments.remove(&channel) {
             Some(a) => a.pump.abort(),
-            None => send_err(out, "no such channel").await,
+            None => send_err_ch(out, "no such channel", channel).await,
         },
         ClientMsg::Resize { channel, cols, rows } => match conn.attachments.get(&channel) {
             Some(a) => {
                 let _ = a.session.resize(cols, rows);
             }
-            None => send_err(out, "no such channel").await,
+            None => send_err_ch(out, "no such channel", channel).await,
         },
     }
 }

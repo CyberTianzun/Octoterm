@@ -42,7 +42,14 @@ pub enum ClientMsg {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ServerMsg {
     HelloOk { proto: u32 },
-    Error { message: String },
+    /// `channel` 有值时表示这个错误是针对某个具体 channel 的操作(attach/
+    /// detach/resize/input)失败;省略(None)表示连接级/会话级错误,序列化时
+    /// 直接不出现这个字段(旧客户端按缺省 None 解析,兼容)。
+    Error {
+        message: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<u32>,
+    },
     Sessions { sessions: Vec<SessionInfo> },
     SessionEvent { event: SessionEventKind, session: SessionInfo },
     /// data = base64 编码的 ANSI 重绘序列

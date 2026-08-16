@@ -21,11 +21,18 @@ export class OctoClient {
   private backoffMs = 250;
   private closed = false;
   private attachments = new Map<number, AttachState>();
+  /** 本次拨号是否已经收到过 hello-ok;每次 dial() 重置。 */
+  private authOk = false;
+  /** hello-ok 之前收到的 error 消息(比如坏 token),用来判断断线是不是因为
+   *  认证失败——认证失败没有重试的意义,重连只会一次次白白触发同样的拒绝。 */
+  private preHelloError: string | null = null;
 
   onControl: (msg: any) => void = () => {};
   onChannelData: (channel: number, payload: Uint8Array) => void = () => {};
   onOpen: () => void = () => {};
   onReconnecting: () => void = () => {};
+  /** 认证失败等不可重试的错误:调用后连接不会再自动重连。 */
+  onFatal: (message: string) => void = () => {};
 
   connect(url: string, token: string) {
     this.url = url;
@@ -39,6 +46,8 @@ export class OctoClient {
   }
 
   private dial() {
+    this.authOk = false;
+    this.preHelloError = null;
     const ws = new WebSocket(this.url);
     ws.binaryType = "arraybuffer";
     this.ws = ws;
@@ -48,6 +57,14 @@ export class OctoClient {
     ws.onmessage = (ev) => this.handle(ev.data as ArrayBuffer);
     ws.onclose = () => {
       if (this.closed) return;
+      // 这次拨号连 hello-ok 都没等到,而且服务端在那之前就已经报过错(典型情况:
+      // token 不对)——重试没有意义,停止重连并让上层提示用户。
+      if (!this.authOk && this.preHelloError !== null) {
+        this.closed = true;
+        localStorage.removeItem("octoterm-token");
+        this.onFatal(this.preHelloError);
+        return;
+      }
       this.onReconnecting();
       const delay = this.backoffMs;
       this.backoffMs = Math.min(this.backoffMs * 2, 10_000);
@@ -63,7 +80,11 @@ export class OctoClient {
     }
     const msg = decodeControl(frame.payload) as any;
     switch (msg.type) {
+      case "error":
+        if (!this.authOk) this.preHelloError = msg.message;
+        break;
       case "hello-ok": {
+        this.authOk = true;
         this.backoffMs = 250;
         // 重连后恢复所有 attach
         for (const [channel, a] of this.attachments) {
