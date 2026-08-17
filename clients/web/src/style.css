@@ -30,9 +30,9 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 #app { display: flex; height: 100dvh; }
 
-/* ---------- 左侧 sidebar ---------- */
+/* ---------- 左侧 sidebar:会话选择/预览/管理 ---------- */
 #sidebar {
-  width: 264px;
+  width: 288px;
   flex: none;
   background: var(--panel);
   border-right: 1px solid var(--line);
@@ -47,7 +47,7 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 }
 #logo { flex: 1; font-weight: 700; font-size: 15px; letter-spacing: 0.4px; }
 #new-session { width: 28px; height: 28px; padding: 0; font-size: 16px; line-height: 1; }
-#session-nav { flex: 1; overflow-y: auto; padding: 4px 8px; }
+#session-nav { flex: 1; overflow-y: auto; padding: 4px 8px 8px; }
 #sidebar-foot {
   padding: 10px 14px;
   border-top: 1px solid var(--line);
@@ -58,9 +58,11 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .srow {
   position: relative;
   padding: 8px 10px;
+  margin-bottom: 6px;
   border-radius: 8px;
   cursor: pointer;
-  border-left: 2px solid transparent;
+  border: 1px solid transparent;
+  border-left-width: 2px;
 }
 .srow:hover { background: var(--panel-2); }
 .srow.active { background: var(--panel-2); border-left-color: var(--accent); }
@@ -69,10 +71,17 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding-right: 52px;
+  padding-right: 56px;
 }
 .srow.active .sname { color: var(--accent); }
-.srow .smeta { color: var(--dim); font-size: 12px; }
+.srow .smeta { color: var(--dim); font-size: 12px; margin-bottom: 6px; }
+.srow .preview {
+  height: 96px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #000;
+  border: 1px solid var(--line);
+}
 .srow .sacts {
   position: absolute;
   top: 8px;
@@ -85,52 +94,34 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .srow .sacts button[data-act="kill"]:hover { border-color: var(--danger); color: var(--danger); }
 #session-nav .empty { color: var(--dim); padding: 16px 10px; font-size: 13px; }
 
-/* ---------- 右侧工作区 ---------- */
-#workspace { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-#workbar {
+/* ---------- 右侧工作区:纯终端 ---------- */
+#workspace { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; }
+#menu {
+  display: none;
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 5;
+  opacity: 0.75;
+}
+#reconnect-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+  background: #7a4a00;
+  color: #fff;
+  text-align: center;
+  padding: 4px;
+}
+#workspace-empty {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
+  justify-content: center;
+  color: var(--dim);
 }
-#menu { display: none; }
-#work-title { flex: 1; font-weight: 600; font-size: 14px; }
-#reconnect-banner { background: #7a4a00; color: #fff; text-align: center; padding: 4px; }
-
-#dashboard {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px;
-  display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-  align-content: start;
-}
-.card {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  cursor: pointer;
-}
-.card:hover { border-color: var(--accent); }
-.card .preview { height: 150px; overflow: hidden; border-radius: 6px; background: #000; }
-.card .row { display: flex; gap: 8px; align-items: center; }
-.card .name {
-  flex: 1;
-  font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.card .meta { color: var(--dim); font-size: 12px; }
-#dashboard .empty { color: var(--dim); grid-column: 1/-1; text-align: center; padding: 60px 0; }
-
 #terminal-wrap { flex: 1; min-height: 0; padding: 6px; }
 #terminal { height: 100%; }
 
@@ -152,5 +143,4 @@ button:hover { border-color: var(--accent); color: var(--accent); }
     background: rgba(0, 0, 0, 0.45);
   }
   #menu { display: inline-block; }
-  #dashboard { grid-template-columns: 1fr; }
 }

@@ -28,28 +28,12 @@ function fmtTime(unixSecs: number): string {
   return new Date(unixSecs * 1000).toLocaleString();
 }
 
-function sessionActions(el: HTMLElement, s: any) {
-  el.addEventListener("click", (ev) => {
-    const act = (ev.target as HTMLElement).dataset?.act;
-    if (act === "kill") {
-      ev.stopPropagation();
-      client.send({ type: "kill-session", id: s.id });
-      return;
-    }
-    if (act === "rename") {
-      ev.stopPropagation();
-      const name = prompt("New name:", s.name);
-      if (name) client.send({ type: "rename-session", id: s.id, name });
-      return;
-    }
-    openTerminal(s.id);
-  });
-}
-
-/* ---------- sidebar:始终渲染 ---------- */
+/* ---------- sidebar:选择/预览/改名/结束都在这里 ---------- */
 function renderSidebar() {
   const nav = $("session-nav");
   nav.innerHTML = "";
+  previews.forEach((t) => t.dispose());
+  previews.clear();
   if (sessions.length === 0) {
     nav.innerHTML = `<div class="empty">还没有会话,点右上角 + 新建</div>`;
     return;
@@ -60,44 +44,33 @@ function renderSidebar() {
     row.innerHTML = `
       <div class="sname"></div>
       <div class="smeta"></div>
+      <div class="preview"></div>
       <div class="sacts">
         <button data-act="rename" title="改名">✎</button>
         <button data-act="kill" title="结束会话">✕</button>
       </div>`;
     row.querySelector(".sname")!.textContent = s.name;
     row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
-    sessionActions(row, s);
-    nav.appendChild(row);
-  }
-}
-
-/* ---------- 工作区空态:预览卡片仪表盘 ---------- */
-function renderDashboard() {
-  const dash = $("dashboard");
-  dash.innerHTML = "";
-  previews.forEach((t) => t.dispose());
-  previews.clear();
-  if (sessions.length === 0) {
-    dash.innerHTML = `<div class="empty">没有运行中的会话</div>`;
-    return;
-  }
-  for (const s of sessions) {
-    const card = document.createElement("div");
-    card.className = "card";
-    card.innerHTML = `
-      <div class="preview"></div>
-      <div class="row"><span class="name"></span>
-        <button data-act="rename">改名</button>
-        <button data-act="kill">结束</button></div>
-      <div class="meta"></div>`;
-    card.querySelector(".name")!.textContent = s.name;
-    card.querySelector(".meta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
-    const preview = new Terminal({ cols: s.cols, rows: s.rows, disableStdin: true, fontSize: 6 });
-    preview.open(card.querySelector(".preview") as HTMLElement);
+    const preview = new Terminal({ cols: s.cols, rows: s.rows, disableStdin: true, fontSize: 5 });
+    preview.open(row.querySelector(".preview") as HTMLElement);
     previews.set(s.id, preview);
     client.send({ type: "preview", id: s.id });
-    sessionActions(card, s);
-    dash.appendChild(card);
+    row.addEventListener("click", (ev) => {
+      const act = (ev.target as HTMLElement).dataset?.act;
+      if (act === "kill") {
+        ev.stopPropagation();
+        client.send({ type: "kill-session", id: s.id });
+        return;
+      }
+      if (act === "rename") {
+        ev.stopPropagation();
+        const name = prompt("New name:", s.name);
+        if (name) client.send({ type: "rename-session", id: s.id, name });
+        return;
+      }
+      openTerminal(s.id);
+    });
+    nav.appendChild(row);
   }
 }
 
@@ -106,6 +79,7 @@ function setDrawer(open: boolean) {
   $("scrim").hidden = !open;
 }
 
+/* ---------- 工作区:纯终端 ---------- */
 function openTerminal(id: number) {
   setDrawer(false);
   if (attachedId === id) {
@@ -118,14 +92,8 @@ function openTerminal(id: number) {
     term = null;
   }
   attachedId = id;
-  // 进入终端时预览不再可见,释放实例
-  previews.forEach((t) => t.dispose());
-  previews.clear();
-  $("dashboard").hidden = true;
+  $("workspace-empty").hidden = true;
   $("terminal-wrap").hidden = false;
-  $("detach").hidden = false;
-  const s = sessions.find((x) => x.id === id);
-  $("work-title").textContent = s ? s.name : `session ${id}`;
   term = new Terminal({ allowProposedApi: true });
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -143,11 +111,8 @@ function closeTerminal() {
   term?.dispose();
   term = null;
   $("terminal-wrap").hidden = true;
-  $("detach").hidden = true;
-  $("dashboard").hidden = false;
-  $("work-title").textContent = "会话";
+  $("workspace-empty").hidden = false;
   client.send({ type: "list-sessions" });
-  renderSidebar();
 }
 
 function refit() {
@@ -158,7 +123,6 @@ function refit() {
 
 window.addEventListener("resize", refit);
 window.visualViewport?.addEventListener("resize", refit);
-$("detach").addEventListener("click", closeTerminal);
 $("menu").addEventListener("click", () => setDrawer(true));
 $("scrim").addEventListener("click", () => setDrawer(false));
 $("new-session").addEventListener("click", () =>
@@ -191,12 +155,6 @@ client.onControl = (msg) => {
     case "sessions":
       sessions = msg.sessions;
       renderSidebar();
-      if (attachedId === null) {
-        renderDashboard();
-      } else {
-        const s = sessions.find((x) => x.id === attachedId);
-        if (s) $("work-title").textContent = s.name;
-      }
       break;
     case "session-event":
       client.send({ type: "list-sessions" });
@@ -215,7 +173,7 @@ client.onControl = (msg) => {
     case "error":
       console.warn("octoterm error:", msg.message);
       // 重连打到一个已经不存在的会话上(channel 对应的 attach 失败):
-      // 该终端已没有意义,退回仪表盘,而不是停留在一个死连接上。
+      // 该终端已没有意义,退回空态,而不是停留在一个死连接上。
       if (msg.channel === TERM_CHANNEL && attachedId !== null) closeTerminal();
       break;
   }
