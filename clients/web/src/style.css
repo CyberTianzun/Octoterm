@@ -136,7 +136,16 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   color: var(--dim);
 }
 #terminal-wrap { flex: 1; min-height: 0; padding: 6px; }
-#terminal { height: 100%; }
+/* 尺寸是服务端说了算的(多端 attach 时取归并结果),未必正好填满视口:
+   小于视口就居中留白,大于视口就滚动。safe 保证溢出时不会把左上角切掉。
+   注意这个盒子必须始终撑满可用空间——FitAddon 量的就是它。 */
+#terminal {
+  height: 100%;
+  overflow: auto;
+  display: flex;
+  align-items: safe center;
+  justify-content: safe center;
+}
 
 /* ---------- 移动端:sidebar 变抽屉 ---------- */
 @media (max-width: 768px) {

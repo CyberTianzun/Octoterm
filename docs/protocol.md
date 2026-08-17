@@ -28,8 +28,9 @@ scope:         everything on the wire between a client and octoterm-server
 | handshake | `crates/server/src/app.rs` |
 | control dispatch, output pumps | `crates/server/src/conn.rs` |
 | pty, ring buffer, grid | `crates/server/src/session/{pty,buffer,grid}.rs` |
+| geometry merge and policy | `crates/server/src/session/pty.rs`, `crates/server/src/config.rs` |
 | client resume logic | `crates/client-core/src/lib.rs`, `clients/web/src/client.ts` |
-| protocol integration tests | `crates/server/tests/ws_{auth,control,attach}.rs` |
+| protocol integration tests | `crates/server/tests/ws_{auth,control,attach,geometry}.rs` |
 
 ## 2. Transport [T]
 
@@ -144,9 +145,9 @@ scope:         everything on the wire between a client and octoterm-server
 | `kill-session` | `id:u64` | auth | kills child; → `session-event{closed}` when reaped |
 | `rename-session` | `id:u64`, `name:str` | auth | → `session-event{renamed}` broadcast |
 | `preview` | `id:u64` | auth | → `preview-data{id}` |
-| `attach` | `id:u64`, `channel:u32`, `last_seq:u64?`, `cols:u16`, `rows:u16` | auth | resizes pty, then → `attached` + recovery burst (§8) |
-| `detach` | `channel:u32` | attached | stops the pump; session keeps running (CH6) |
-| `resize` | `channel:u32`, `cols:u16`, `rows:u16` | attached | resizes pty + grid |
+| `attach` | `id:u64`, `channel:u32`, `last_seq:u64?`, `cols:u16`, `rows:u16` | auth | registers this attachment's desired size (G2), then → `attached` + recovery burst (§8) |
+| `detach` | `channel:u32` | attached | stops the pump, drops the desired size (G8); session keeps running (CH6) |
+| `resize` | `channel:u32`, `cols:u16`, `rows:u16` | attached | updates this attachment's desired size (G2) |
 
 `name: null` → server-generated default. `command: null` → default shell
 (`$SHELL` or `/bin/sh` on unix, `powershell.exe` on Windows), spawned in `$HOME`
@@ -162,6 +163,7 @@ with `TERM=xterm-256color`, `COLORTERM=truecolor`.
 | `session-event` | `event:SessionEventKind`, `session:SessionInfo` | broadcast on create/rename/close |
 | `preview-data` | `id:u64`, `data:str` | reply to `preview`; `data` = base64 of an ANSI repaint (D6) |
 | `attached` | `channel:u32`, `seq:u64`, `mode:AttachMode` | first reply to `attach` |
+| `resized` | `channel:u32`, `cols:u16`, `rows:u16` | authoritative geometry of the session, on every attached channel (G5, G6) |
 | `resync-begin` | `channel:u32` | opens a resync burst (S5) |
 | `resync-end` | `channel:u32`, `seq:u64` | closes a resync burst; authoritative anchor (S7b) |
 | `session-exited` | `channel:u32`, `id:u64` | child exited; the channel's stream is over (S11) |
@@ -208,7 +210,8 @@ SessionEventKind "created" | "renamed" | "closed"
   `resync-begin{c}` → one data frame on `c` carrying a synthesized ANSI repaint
   → `resync-end{c, seq}`. The client MUST reset its local emulator on
   `resync-begin`. Repaint bytes are synthesized and are **not** part of the seq
-  stream.
+  stream. Every burst is immediately preceded by a `resized` (G6), which is not
+  part of the burst.
 - **S6** Lossy backpressure: when a connection's broadcast queue lags, the
   server discards the bytes that connection missed and issues a fresh resync
   (S5) mid-stream. Clients MUST accept a resync at any time, not only at attach.
@@ -236,6 +239,42 @@ SessionEventKind "created" | "renamed" | "closed"
   it. A `session-event{closed}` for the same id is broadcast independently and
   its ordering relative to `session-exited` is NOT guaranteed — clients MUST
   tolerate either order and MUST treat both as idempotent.
+
+### 8.1 Geometry [G]
+
+- **G1** A session has exactly one geometry: one pty size, one grid. Every
+  attachment of that session receives the same byte stream (CH5, D1), so the
+  server cannot crop or reflow per client. Geometry is session state, not
+  connection state.
+- **G2** `attach{cols,rows}` and `resize{cols,rows}` are **requests, not
+  commands**: they register (attach) or update (resize) that attachment's
+  desired size. The server merges the desired sizes of all live attachments
+  into the authoritative geometry.
+- **G3** The merge policy is server configuration, not part of the wire
+  (`window-size`: `smallest` — the default, per-dimension minimum, nobody sees
+  a truncated screen — or `largest`, or `latest`). Clients MUST NOT assume the
+  geometry they requested was adopted, and MUST NOT infer the policy.
+- **G4** The merged value is clamped to a floor of 20×5. A session with no
+  attachments keeps its current geometry unchanged — detaching the last client
+  MUST NOT reflow the application.
+- **G5** When the authoritative geometry changes, the server sends
+  `resized{channel,cols,rows}` on **every** attached channel of that session,
+  across all connections, including the attachment that caused the change. No
+  `resized` is sent when a request leaves the merged value unchanged, so a
+  client MUST NOT wait for one as an acknowledgement of its `resize`.
+- **G6** Exactly one `resized` precedes the screen bytes in every recovery
+  path: before the replayed data frame in replay mode, and immediately before
+  `resync-begin` in every resync (attach-time or mid-stream, S5/S6). A client
+  therefore always knows the geometry a repaint was rendered for.
+- **G7** Clients MUST render at the geometry last announced by `resized`, and
+  MUST NOT resize their local emulator on their own — doing so misaligns
+  wrapping against a byte stream the server produced for a different width.
+  What to do with left-over space (letterbox, scale, scroll) is the client's
+  business (U7).
+- **G8** Detach, connection loss, or pump shutdown drops that attachment's
+  desired size and re-merges. Note that a dead connection is only noticed after
+  the liveness timeout (T7), so a vanished client can hold geometry hostage for
+  up to 90 s.
 
 ## 9. Errors [E]
 
@@ -284,6 +323,8 @@ Current corpus (reference only, see E4):
 | server Ping interval | 30 s | `conn.rs KEEPALIVE_INTERVAL` |
 | read timeout (liveness) | 90 s | `conn.rs READ_TIMEOUT` |
 | default session geometry | 80×24 until first attach | `manager.rs` |
+| geometry floor | 20×5 | `pty.rs MIN_COLS/MIN_ROWS` |
+| default geometry merge policy | `smallest` | `config.rs WindowSize` |
 | reference reconnect backoff | 250 ms doubling, cap 10 s | `client-core`, `client.ts` |
 
 ## 11. Compatibility and versioning [X]
@@ -322,7 +363,8 @@ Before proposing anything new, rule out every applicable row:
 | session inventory | `list-sessions` → `sessions` |
 | server-initiated notice about a session's existence or identity | a new `SessionEventKind` on `session-event` |
 | per-attachment lifecycle | `attach` / `detach` |
-| geometry change | `resize` |
+| ask for a different geometry | `resize` — a request, not a command (G2) |
+| tell clients the authoritative geometry | `resized` (G5) |
 | report a failure | `error`, with `channel` when operation-scoped |
 | recover after a gap | `attach{last_seq}` (S4) |
 
@@ -372,6 +414,9 @@ Every item MUST be answered in the proposal.
 - **U5** Default session name (currently `octoterm-{id}`).
 - **U6** Multi-user identity or authorization beyond one shared bearer token.
 - **U7** What the client renders; the server assumes only a VT-compatible sink.
+- **U8** Which geometry merge policy a deployment runs, and whether it offers
+  more than the three in G3 — server configuration, never negotiated on the
+  wire. Clients only ever state a wish and obey `resized`.
 
 ## 14. Known deviations from the design doc
 

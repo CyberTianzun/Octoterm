@@ -1,6 +1,6 @@
 use clap::Parser;
 use octoterm_server::app::{serve, AppState};
-use octoterm_server::config::Config;
+use octoterm_server::config::{Config, WindowSize};
 use octoterm_server::session::manager::SessionManager;
 
 #[derive(Parser)]
@@ -18,6 +18,9 @@ struct Args {
     /// 固定鉴权 token(缺省每次启动随机生成并打印)
     #[arg(long)]
     token: Option<String>,
+    /// 多端同时 attach 一个会话时 pty 用谁的尺寸(缺省 smallest)
+    #[arg(long, value_enum)]
+    window_size: Option<WindowSize>,
 }
 
 #[tokio::main]
@@ -33,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::load(args.config)?;
     let listen = octoterm_server::config::effective_listen(config.listen, args.host, args.port);
     let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
-    let manager = SessionManager::new(1 << 20);
+    let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
     let listener = tokio::net::TcpListener::bind(listen).await?;
 
     // Jupyter 式:每次启动打印可直接点开的访问 URL(0.0.0.0/:: 显示为 127.0.0.1)

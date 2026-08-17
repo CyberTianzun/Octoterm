@@ -8,17 +8,36 @@ fn default_listen() -> SocketAddr {
     "127.0.0.1:7683".parse().unwrap()
 }
 
+/// 多个连接同时 attach 同一个会话时,pty 用谁的尺寸(tmux `window-size` 的语义)。
+///
+/// 一个会话只有一个 pty、一份 grid,所有 attach 收到的是同一份字节流,服务端
+/// 无法逐客户端裁剪画面,所以必须从各端的尺寸诉求里归并出一个权威值。这是服务端
+/// 策略,不在协议里(G3):客户端只上报自己想要多大,再按 `resized` 渲染。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+pub enum WindowSize {
+    /// 取所有 attach 的最小值:谁都不会看到被截断的画面,大屏那端留白。
+    #[default]
+    Smallest,
+    /// 取最大值:小屏那端只能看到画面的一部分。
+    Largest,
+    /// 跟随最近一次 attach/resize 的那一端。
+    Latest,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default = "default_listen")]
     pub listen: SocketAddr,
     #[serde(default)]
     pub token: Option<String>,
+    #[serde(default)]
+    pub window_size: WindowSize,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), token: None }
+        Self { listen: default_listen(), token: None, window_size: WindowSize::default() }
     }
 }
 
@@ -106,6 +125,13 @@ mod tests {
             effective_listen(base(), Some("::1".parse().unwrap()), Some(9000)).to_string(),
             "[::1]:9000"
         );
+    }
+
+    #[test]
+    fn window_size_defaults_to_smallest_and_parses_kebab_case() {
+        assert_eq!(Config::default().window_size, WindowSize::Smallest);
+        let cfg: Config = toml::from_str("window_size = \"latest\"").unwrap();
+        assert_eq!(cfg.window_size, WindowSize::Latest);
     }
 
     #[test]

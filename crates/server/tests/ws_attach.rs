@@ -1,62 +1,11 @@
 mod common;
-use common::{control, parse_server, start_test_server, start_test_server_with_cap};
+use common::{
+    connect, control, create_session, input_frame, long_lived_cmd, next_control, parse_server,
+    read_channel_until, start_test_server, start_test_server_with_cap,
+};
 use futures_util::{SinkExt, StreamExt};
-use octoterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, PROTO_VERSION};
+use octoterm_protocol::{AttachMode, ClientMsg, ServerMsg};
 use std::time::Duration;
-use tokio_tungstenite::tungstenite::Message;
-
-type Ws = tokio_tungstenite::WebSocketStream<
-    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
->;
-
-async fn connect(url: &str) -> Ws {
-    let (mut ws, _) = tokio_tungstenite::connect_async(url).await.unwrap();
-    ws.send(control(&ClientMsg::Hello { token: "t".into(), proto: PROTO_VERSION })).await.unwrap();
-    loop {
-        if let Some((0, Ok(ServerMsg::HelloOk { .. }))) =
-            parse_server(ws.next().await.unwrap().unwrap())
-        {
-            break;
-        }
-    }
-    ws
-}
-
-/// 收集 channel 上的原始字节,直到出现 needle 或超时
-async fn read_channel_until(ws: &mut Ws, channel: u32, needle: &str) -> String {
-    let mut acc = Vec::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    while tokio::time::Instant::now() < deadline {
-        let Ok(Some(Ok(msg))) = tokio::time::timeout(Duration::from_millis(500), ws.next()).await
-        else {
-            continue;
-        };
-        if let Some((ch, Err(bytes))) = parse_server(msg) {
-            if ch == channel {
-                acc.extend_from_slice(&bytes);
-                if String::from_utf8_lossy(&acc).contains(needle) {
-                    break;
-                }
-            }
-        }
-    }
-    String::from_utf8_lossy(&acc).into_owned()
-}
-
-async fn next_control(ws: &mut Ws) -> ServerMsg {
-    loop {
-        if let Some((0, Ok(m))) = parse_server(ws.next().await.unwrap().unwrap()) {
-            return m;
-        }
-    }
-}
-
-fn long_lived_cmd() -> Option<Vec<String>> {
-    #[cfg(unix)]
-    return Some(vec!["/bin/sh".into(), "-i".into()]);
-    #[cfg(windows)]
-    return None; // 默认 powershell
-}
 
 /// 快速产生大量输出、然后保持存活(便于测试结束时 kill),用来把 256 槽的
 /// broadcast 挤爆,逼出服务端的 Lagged 处理路径。
@@ -80,18 +29,6 @@ fn bulk_producer_cmd() -> Vec<String> {
     }
 }
 
-async fn create_session(ws: &mut Ws, command: Option<Vec<String>>) -> u64 {
-    ws.send(control(&ClientMsg::NewSession { name: None, command })).await.unwrap();
-    match next_control(ws).await {
-        ServerMsg::SessionEvent { session, .. } => session.id,
-        other => panic!("unexpected: {other:?}"),
-    }
-}
-
-fn input_frame(channel: u32, bytes: &[u8]) -> Message {
-    Message::Binary(Frame::new(channel, bytes.to_vec()).encode().into())
-}
-
 #[tokio::test]
 async fn attach_echo_roundtrip() {
     let url = start_test_server("t").await;
@@ -105,6 +42,11 @@ async fn attach_echo_roundtrip() {
         ServerMsg::Attached { channel: 1, mode: AttachMode::Resync, .. } => {}
         other => panic!("unexpected: {other:?}"),
     }
+    // 只有这一个 attach:权威尺寸就是它请求的那个,且必须先于重绘到达(G6)
+    assert!(matches!(
+        next_control(&mut ws).await,
+        ServerMsg::Resized { channel: 1, cols: 100, rows: 30 }
+    ));
     // resync 流程:begin → 重绘帧 → end
     assert!(matches!(next_control(&mut ws).await, ServerMsg::ResyncBegin { channel: 1 }));
 
@@ -170,6 +112,7 @@ async fn stale_seq_gets_resync() {
         ServerMsg::Attached { channel: 1, mode: AttachMode::Resync, .. } => {}
         other => panic!("unexpected: {other:?}"),
     }
+    assert!(matches!(next_control(&mut ws).await, ServerMsg::Resized { channel: 1, .. }));
     assert!(matches!(next_control(&mut ws).await, ServerMsg::ResyncBegin { channel: 1 }));
     loop {
         if let ServerMsg::ResyncEnd { channel: 1, .. } = next_control(&mut ws).await {
@@ -244,6 +187,7 @@ async fn evicted_seq_downgrades_to_resync() {
         ServerMsg::Attached { channel: 2, mode: AttachMode::Resync, .. } => {}
         other => panic!("unexpected: {other:?}"),
     }
+    assert!(matches!(next_control(&mut ws2).await, ServerMsg::Resized { channel: 2, .. }));
     assert!(matches!(next_control(&mut ws2).await, ServerMsg::ResyncBegin { channel: 2 }));
     loop {
         if let ServerMsg::ResyncEnd { channel: 2, .. } = next_control(&mut ws2).await {

@@ -51,6 +51,10 @@ fields are optional:
 ```toml
 listen = "127.0.0.1:7683"
 token = "my-fixed-token"
+# When several clients attach the same session, one pty has one size, so their
+# requested sizes are merged: "smallest" (default, nobody sees a truncated
+# screen), "largest", or "latest" (follow the most recent client).
+window_size = "smallest"
 ```
 
 By default the server listens on 127.0.0.1 only. To reach it from other

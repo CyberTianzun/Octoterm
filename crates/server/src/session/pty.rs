@@ -1,6 +1,7 @@
+use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -10,37 +11,106 @@ use octoterm_protocol::SessionInfo;
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tokio::sync::broadcast;
 
+use crate::config::WindowSize;
+
 use super::buffer::SeqBuffer;
 use super::grid::SessionGrid;
 
 pub const BROADCAST_CAP: usize = 256;
 
+/// 尺寸下界:某个客户端上报 1×1(手机上软键盘顶掉整个视口时真会发生)不该把
+/// 会话压死,更不该让别人跟着一起被压死。
+const MIN_COLS: u16 = 20;
+const MIN_ROWS: u16 = 5;
+
 #[derive(Debug, Clone)]
 pub enum SessionOutput {
     Data { end_seq: u64, bytes: Bytes },
+    /// 权威尺寸变了(见 `Session::apply_size`)。每个 attach 的泵都会把它转成
+    /// `ServerMsg::Resized` 发给自己那一端。
+    Resized { cols: u16, rows: u16 },
     Exited,
 }
 
 pub struct Snapshot {
     pub end_seq: u64,
     pub repaint: Vec<u8>,
+    /// 这份重绘是按哪个尺寸渲染的——和 repaint 取自同一次加锁,不会错配。
+    pub cols: u16,
+    pub rows: u16,
+}
+
+/// 一个 attach 的尺寸诉求。`ord` 单调递增,Latest 策略据此挑出最近的那个。
+struct Desired {
+    cols: u16,
+    rows: u16,
+    ord: u64,
 }
 
 struct Shared {
     name: String,
     grid: SessionGrid,
     buffer: SeqBuffer,
+    viewports: HashMap<u64, Desired>,
+    next_ord: u64,
 }
 
 pub struct Session {
     pub id: u64,
     created_at: u64,
+    window_size: WindowSize,
     shared: Mutex<Shared>,
     writer: Mutex<Option<Box<dyn Write + Send>>>,
     master: Mutex<Option<Box<dyn MasterPty + Send>>>,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     tx: broadcast::Sender<SessionOutput>,
     exited: AtomicBool,
+    next_viewport: AtomicU64,
+}
+
+/// 按策略把所有 attach 的尺寸诉求归并成 pty 的权威尺寸。
+///
+/// 没有任何 attach 时返回 `None`,调用方保持当前尺寸不变:最后一个客户端离开
+/// 时把会话弹回默认 80×24,只会让里面的应用白白重排一次。
+fn effective_size(policy: WindowSize, viewports: &HashMap<u64, Desired>) -> Option<(u16, u16)> {
+    let (cols, rows) = match policy {
+        WindowSize::Smallest => (
+            viewports.values().map(|v| v.cols).min()?,
+            viewports.values().map(|v| v.rows).min()?,
+        ),
+        WindowSize::Largest => (
+            viewports.values().map(|v| v.cols).max()?,
+            viewports.values().map(|v| v.rows).max()?,
+        ),
+        WindowSize::Latest => {
+            let latest = viewports.values().max_by_key(|v| v.ord)?;
+            (latest.cols, latest.rows)
+        }
+    };
+    Some((cols.max(MIN_COLS), rows.max(MIN_ROWS)))
+}
+
+/// 一个 attach 在会话尺寸表里的席位。析构即摘除并重算 —— detach、连接断开、
+/// 泵被 abort 全走这一条路,不会把已经走掉的客户端留在表里锁着别人的尺寸。
+pub struct Viewport {
+    session: Arc<Session>,
+    id: u64,
+}
+
+impl Viewport {
+    /// 更新本 attach 的尺寸诉求。是否真的落到 pty 上由策略决定(G2)。
+    pub fn set(&self, cols: u16, rows: u16) -> Result<()> {
+        self.session.set_viewport(self.id, cols, rows)
+    }
+}
+
+impl Drop for Viewport {
+    fn drop(&mut self) {
+        self.session.shared.lock().unwrap().viewports.remove(&self.id);
+        if let Err(e) = self.session.apply_size() {
+            tracing::debug!(session = self.session.id, error = %e, "resize after detach failed");
+        }
+    }
 }
 
 fn default_shell() -> Vec<String> {
@@ -100,6 +170,7 @@ impl Session {
         rows: u16,
         command: Option<Vec<String>>,
         buffer_cap: usize,
+        window_size: WindowSize,
     ) -> Result<Arc<Session>> {
         let argv = command.unwrap_or_else(default_shell);
         if argv.is_empty() || argv[0].is_empty() {
@@ -144,16 +215,20 @@ impl Session {
         let session = Arc::new(Session {
             id,
             created_at: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            window_size,
             shared: Mutex::new(Shared {
                 name,
                 grid: SessionGrid::new(cols, rows),
                 buffer: SeqBuffer::new(buffer_cap),
+                viewports: HashMap::new(),
+                next_ord: 0,
             }),
             writer: Mutex::new(Some(writer)),
             master: Mutex::new(Some(pty.master)),
             killer: Mutex::new(killer),
             tx: tx.clone(),
             exited: AtomicBool::new(false),
+            next_viewport: AtomicU64::new(1),
         });
 
         // 阻塞读线程:pty 输出 → grid + 环形缓冲 + 广播
@@ -258,19 +333,55 @@ impl Session {
         Ok(())
     }
 
-    pub fn resize(&self, cols: u16, rows: u16) -> Result<()> {
+    /// 登记一个 attach 的尺寸诉求,返回它在尺寸表里的席位(析构即摘除)。
+    pub fn viewport(self: &Arc<Self>, cols: u16, rows: u16) -> Viewport {
+        let id = self.next_viewport.fetch_add(1, Ordering::SeqCst);
+        let vp = Viewport { session: self.clone(), id };
+        // pty 已经关掉的会话仍然允许 attach:客户端马上会收到 session-exited。
+        let _ = vp.set(cols, rows);
+        vp
+    }
+
+    fn set_viewport(&self, id: u64, cols: u16, rows: u16) -> Result<()> {
+        {
+            let mut shared = self.shared.lock().unwrap();
+            let ord = shared.next_ord;
+            shared.next_ord += 1;
+            shared.viewports.insert(id, Desired { cols, rows, ord });
+        }
+        self.apply_size()
+    }
+
+    /// 重算权威尺寸并落到 pty + grid。尺寸没变就什么都不做——否则每个客户端的
+    /// 每一次 refit 都会给里面的应用来一发 SIGWINCH。变了就广播,所有 attach
+    /// 都会收到 `resized`,包括触发这次变化的那一端。
+    fn apply_size(&self) -> Result<()> {
+        let mut shared = self.shared.lock().unwrap();
+        let Some((cols, rows)) = effective_size(self.window_size, &shared.viewports) else {
+            return Ok(()); // 没有 attach:保持当前尺寸
+        };
+        if shared.grid.size() == (cols, rows) {
+            return Ok(());
+        }
         {
             let guard = self.master.lock().unwrap();
             let master = guard.as_ref().context("session pty closed")?;
             master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
         }
-        self.shared.lock().unwrap().grid.resize(cols, rows);
+        shared.grid.resize(cols, rows);
+        drop(shared);
+        let _ = self.tx.send(SessionOutput::Resized { cols, rows });
         Ok(())
+    }
+
+    pub fn size(&self) -> (u16, u16) {
+        self.shared.lock().unwrap().grid.size()
     }
 
     pub fn snapshot(&self) -> Snapshot {
         let shared = self.shared.lock().unwrap();
-        Snapshot { end_seq: shared.buffer.end_seq(), repaint: shared.grid.repaint() }
+        let (cols, rows) = shared.grid.size();
+        Snapshot { end_seq: shared.buffer.end_seq(), repaint: shared.grid.repaint(), cols, rows }
     }
 
     pub fn replay_from(&self, seq: u64) -> Option<(u64, Vec<u8>)> {
@@ -339,10 +450,40 @@ mod tests {
 
     #[test]
     fn empty_command_is_rejected() {
-        let err = match Session::spawn(1, "t".into(), 80, 24, Some(vec![]), 64) {
+        let spawn = Session::spawn(1, "t".into(), 80, 24, Some(vec![]), 64, WindowSize::default());
+        let err = match spawn {
             Ok(_) => panic!("empty command should fail"),
             Err(e) => e,
         };
         assert!(err.to_string().contains("empty command"), "{err}");
+    }
+
+    /// 按 attach 顺序建表:ord 就是数组下标,Latest 取最后一个。
+    fn viewports(sizes: &[(u16, u16)]) -> HashMap<u64, Desired> {
+        sizes
+            .iter()
+            .enumerate()
+            .map(|(i, &(cols, rows))| (i as u64, Desired { cols, rows, ord: i as u64 }))
+            .collect()
+    }
+
+    #[test]
+    fn no_viewport_keeps_current_size() {
+        assert_eq!(effective_size(WindowSize::Smallest, &viewports(&[])), None);
+    }
+
+    #[test]
+    fn smallest_takes_the_min_of_each_dimension_independently() {
+        // 宽的那个矮、窄的那个高:两个维度分别取最小,谁都不会被截断。
+        let vps = viewports(&[(120, 24), (80, 40)]);
+        assert_eq!(effective_size(WindowSize::Smallest, &vps), Some((80, 24)));
+        assert_eq!(effective_size(WindowSize::Largest, &vps), Some((120, 40)));
+        assert_eq!(effective_size(WindowSize::Latest, &vps), Some((80, 40)));
+    }
+
+    #[test]
+    fn extreme_report_is_clamped_to_the_floor() {
+        let vps = viewports(&[(120, 40), (1, 1)]);
+        assert_eq!(effective_size(WindowSize::Smallest, &vps), Some((MIN_COLS, MIN_ROWS)));
     }
 }

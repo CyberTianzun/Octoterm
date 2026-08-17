@@ -144,12 +144,14 @@ export class OctoClient {
     this.send({ type: "detach", channel });
   }
 
+  /** 上报本端想要的尺寸(不是命令:权威尺寸由服务端归并所有 attach 后经
+   *  `resized` 下发)。尺寸没变就不发——软键盘弹出/收起会连着触发一串 refit。 */
   resize(channel: number, cols: number, rows: number) {
     const a = this.attachments.get(channel);
-    if (a) {
-      a.cols = cols;
-      a.rows = rows;
-    }
+    if (!a) return;
+    if (a.cols === cols && a.rows === rows) return;
+    a.cols = cols;
+    a.rows = rows;
     this.send({ type: "resize", channel, cols, rows });
   }
 }

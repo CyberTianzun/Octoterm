@@ -1,10 +1,11 @@
+use octoterm_server::config::WindowSize;
 use octoterm_protocol::{ServerMsg, SessionEventKind};
 use octoterm_server::session::manager::SessionManager;
 use std::time::Duration;
 
 #[tokio::test]
 async fn fast_exiting_command_is_removed() {
-    let m = SessionManager::new(1 << 20);
+    let m = SessionManager::new(1 << 20, WindowSize::default());
     let mut events = m.events();
     #[cfg(unix)]
     let cmd = Some(vec!["/bin/sh".into(), "-c".into(), "exit 0".into()]);
@@ -24,7 +25,7 @@ async fn fast_exiting_command_is_removed() {
 
 #[tokio::test]
 async fn create_list_rename_kill() {
-    let m = SessionManager::new(1 << 20);
+    let m = SessionManager::new(1 << 20, WindowSize::default());
     let mut events = m.events();
 
     let s = m.create(Some("work".into()), None).unwrap();
@@ -63,7 +64,7 @@ async fn create_list_rename_kill() {
 
 #[tokio::test]
 async fn default_name_uses_id() {
-    let m = SessionManager::new(1 << 20);
+    let m = SessionManager::new(1 << 20, WindowSize::default());
     let s = m.create(None, None).unwrap();
     assert_eq!(m.list()[0].name, format!("octoterm-{}", s.id));
     m.kill(s.id);

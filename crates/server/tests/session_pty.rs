@@ -1,3 +1,4 @@
+use octoterm_server::config::WindowSize;
 use octoterm_server::session::pty::{Session, SessionOutput};
 use std::time::Duration;
 
@@ -23,6 +24,7 @@ async fn collect_until_exit(session: &Session) -> Vec<u8> {
     loop {
         match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
             Ok(Ok(SessionOutput::Data { bytes, .. })) => out.extend_from_slice(&bytes),
+            Ok(Ok(SessionOutput::Resized { .. })) => continue,
             Ok(Ok(SessionOutput::Exited)) => break,
             Ok(Err(_)) | Err(_) => break,
         }
@@ -32,7 +34,9 @@ async fn collect_until_exit(session: &Session) -> Vec<u8> {
 
 #[tokio::test]
 async fn spawned_command_output_is_broadcast_and_recorded() {
-    let s = Session::spawn(1, "t".into(), 80, 24, echo_cmd("MARKER_A"), 1 << 20).unwrap();
+    let s =
+        Session::spawn(1, "t".into(), 80, 24, echo_cmd("MARKER_A"), 1 << 20, WindowSize::default())
+            .unwrap();
     let out = collect_until_exit(&s).await;
     let text = String::from_utf8_lossy(&out);
     assert!(text.contains("MARKER_A"), "got: {text}");
@@ -51,7 +55,7 @@ async fn spawned_command_output_is_broadcast_and_recorded() {
 #[tokio::test]
 async fn write_input_reaches_child() {
     // 交互式 shell 回显输入
-    let s = Session::spawn(2, "t".into(), 80, 24, None, 1 << 20).unwrap();
+    let s = Session::spawn(2, "t".into(), 80, 24, None, 1 << 20, WindowSize::default()).unwrap();
     let mut rx = s.subscribe();
     tokio::time::sleep(Duration::from_millis(300)).await; // 等 shell 就绪
     s.write_input(b"echo MARKER_B\r").unwrap();
@@ -74,7 +78,7 @@ async fn write_input_reaches_child() {
 
 #[tokio::test]
 async fn kill_terminates_session() {
-    let s = Session::spawn(3, "t".into(), 80, 24, None, 1 << 20).unwrap();
+    let s = Session::spawn(3, "t".into(), 80, 24, None, 1 << 20, WindowSize::default()).unwrap();
     let mut rx = s.subscribe();
     tokio::time::sleep(Duration::from_millis(300)).await;
     s.kill();

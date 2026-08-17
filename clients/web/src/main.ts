@@ -112,9 +112,9 @@ function openTerminal(id: number) {
   fit = new FitAddon();
   term.loadAddon(fit);
   term.open($("terminal"));
-  fit.fit();
   term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
-  client.attach(id, TERM_CHANNEL, term.cols, term.rows);
+  const want = proposeSize();
+  client.attach(id, TERM_CHANNEL, want?.cols ?? term.cols, want?.rows ?? term.rows);
   term.focus();
   renderSidebar();
 }
@@ -124,15 +124,25 @@ function closeTerminal() {
   attachedId = null;
   term?.dispose();
   term = null;
+  fit = null;
   $("terminal-wrap").hidden = true;
   $("workspace-empty").hidden = false;
   client.send({ type: "list-sessions" });
 }
 
+/** 量一下当前视口放得下多大。只作为"诉求"上报——多端 attach 同一个会话时 pty
+ *  只有一个尺寸,权威值由服务端归并后经 resized 下发,所以这里不能直接 fit()。 */
+function proposeSize(): { cols: number; rows: number } | null {
+  if (!term || !fit) return null;
+  const dims = fit.proposeDimensions();
+  if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return null;
+  if (dims.cols < 1 || dims.rows < 1) return null;
+  return { cols: dims.cols, rows: dims.rows };
+}
+
 function refit() {
-  if (!term || !fit) return;
-  fit.fit();
-  client.resize(TERM_CHANNEL, term.cols, term.rows);
+  const want = proposeSize();
+  if (want) client.resize(TERM_CHANNEL, want.cols, want.rows);
 }
 
 window.addEventListener("resize", refit);
@@ -181,6 +191,11 @@ client.onControl = (msg) => {
       if (p) p.write(Uint8Array.from(atob(msg.data), (c) => c.charCodeAt(0)));
       break;
     }
+    case "resized":
+      // 服务端说了算:字节流是按这个尺寸换行的,自作主张按视口大小渲染会错位。
+      // 视口比它大的部分留白(见 style.css 的居中),小则出现滚动条。
+      if (msg.channel === TERM_CHANNEL) term?.resize(msg.cols, msg.rows);
+      break;
     case "resync-begin":
       term?.reset();
       break;

@@ -6,20 +6,24 @@ use anyhow::Result;
 use octoterm_protocol::{ServerMsg, SessionEventKind, SessionInfo};
 use tokio::sync::broadcast;
 
+use crate::config::WindowSize;
+
 use super::pty::{Session, SessionOutput};
 
 pub struct SessionManager {
     buffer_cap: usize,
+    window_size: WindowSize,
     next_id: AtomicU64,
     sessions: Mutex<HashMap<u64, Arc<Session>>>,
     events: broadcast::Sender<ServerMsg>,
 }
 
 impl SessionManager {
-    pub fn new(buffer_cap: usize) -> Arc<Self> {
+    pub fn new(buffer_cap: usize, window_size: WindowSize) -> Arc<Self> {
         let (events, _) = broadcast::channel(64);
         Arc::new(Self {
             buffer_cap,
+            window_size,
             next_id: AtomicU64::new(1),
             sessions: Mutex::new(HashMap::new()),
             events,
@@ -41,7 +45,8 @@ impl SessionManager {
     ) -> Result<Arc<Session>> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = name.unwrap_or_else(|| format!("octoterm-{id}"));
-        let session = match Session::spawn(id, name, 80, 24, command, self.buffer_cap) {
+        let session =
+            match Session::spawn(id, name, 80, 24, command, self.buffer_cap, self.window_size) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(session = id, error = %e, "session spawn failed");

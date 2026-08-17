@@ -62,6 +62,10 @@ pub enum ServerMsg {
     /// `last_seq` 上。`Attached.seq` 只是"重放会在哪个 seq 结束"的参考信息,
     /// 绝不能被客户端当作锚点使用 —— 用它会与按字节推进的账本重复计数。
     Attached { channel: u32, seq: u64, mode: AttachMode },
+    /// 会话的权威尺寸(G1)。pty 只有一个尺寸,而 `attach`/`resize` 只是本端的
+    /// 尺寸诉求(G2);服务端按 window-size 策略归并所有 attach 之后用这条消息
+    /// 通知每个 attach。客户端必须按这里的尺寸渲染,而不是自己请求的那个(G7)。
+    Resized { channel: u32, cols: u16, rows: u16 },
     ResyncBegin { channel: u32 },
     /// resync 的权威锚点:重绘(repaint)字节是合成的,不计入 seq 账本;
     /// 客户端收到本消息后应把 `last_seq` 直接置为 `seq`,此后按数据帧字节长度累加。

@@ -10,7 +10,7 @@ use octoterm_protocol::{AttachMode, ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL
 use tokio::sync::mpsc;
 
 use crate::app::AppState;
-use crate::session::pty::{Session, SessionOutput};
+use crate::session::pty::{Session, SessionOutput, Viewport};
 
 const COALESCE_MAX: usize = 64 * 1024;
 
@@ -30,7 +30,12 @@ pub(crate) fn control_frame(msg: &ServerMsg) -> Message {
     Message::Binary(Frame::new(CONTROL_CHANNEL, serde_json::to_vec(msg).unwrap()).encode().into())
 }
 
-/// 发送一次完整的 resync:快照 → ResyncBegin → 重绘帧 → ResyncEnd{seq},
+/// 告知这个 channel 会话的权威尺寸。返回 false 表示连接已断。
+async fn send_resized(out: &mpsc::Sender<Message>, channel: u32, (cols, rows): (u16, u16)) -> bool {
+    out.send(control_frame(&ServerMsg::Resized { channel, cols, rows })).await.is_ok()
+}
+
+/// 发送一次完整的 resync:快照 → Resized → ResyncBegin → 重绘帧 → ResyncEnd{seq},
 /// 并把水位线推进到快照的 end_seq。任意一步发送失败则返回 false(调用方应结束泵)。
 async fn send_resync(
     session: &Arc<Session>,
@@ -39,6 +44,10 @@ async fn send_resync(
     watermark: &mut u64,
 ) -> bool {
     let snap = session.snapshot();
+    // 重绘是整屏的,客户端必须先按重绘所用的尺寸调整,再吃这一帧(G6)
+    if !send_resized(out, channel, (snap.cols, snap.rows)).await {
+        return false;
+    }
     if out.send(control_frame(&ServerMsg::ResyncBegin { channel })).await.is_err() {
         return false;
     }
@@ -62,6 +71,9 @@ async fn send_resync(
 
 struct Attachment {
     session: Arc<Session>,
+    /// 本 attach 在会话尺寸表里的席位:Attachment 一旦从 map 里移除(detach、
+    /// 或连接结束时整张表被 drop),它跟着析构,会话尺寸自动重算。
+    viewport: Viewport,
     pump: tokio::task::JoinHandle<()>,
 }
 
@@ -236,8 +248,10 @@ async fn handle_control(
                 tracing::warn!(session = id, channel, "attach: no such session");
                 return send_err_ch(out, "no such session", channel).await;
             };
+            // 先登记尺寸诉求再订阅:这次 attach 引起的尺寸变化广播给已有的
+            // attach 就够了,本端的权威尺寸由下面的 resized 一并带出去。
+            let viewport = session.viewport(cols, rows);
             let rx = session.subscribe(); // 先订阅再快照,不丢中间字节
-            let _ = session.resize(cols, rows);
 
             // 决定 replay 还是 resync,并发送恢复数据
             let replay = last_seq.and_then(|seq| session.replay_from(seq));
@@ -246,39 +260,36 @@ async fn handle_control(
                 None => (AttachMode::Resync, 0), // resync 的权威 seq 在 ResyncEnd 里
             };
             let _ = out.send(control_frame(&ServerMsg::Attached { channel, seq, mode })).await;
-            let watermark = match replay {
+            let mut watermark = 0;
+            match replay {
                 Some((end_seq, bytes)) => {
+                    // 权威尺寸未必是本端请求的那个(取决于 window-size 策略),
+                    // 画面字节之前先告诉客户端该按多大渲染(G6)
+                    send_resized(out, channel, session.size()).await;
                     if !bytes.is_empty() {
                         let _ = out
                             .send(Message::Binary(Frame::new(channel, bytes).encode().into()))
                             .await;
                     }
-                    end_seq
+                    watermark = end_seq;
                 }
+                // resync 自带 resized(见 send_resync)
                 None => {
-                    let snap = session.snapshot();
-                    let _ = out.send(control_frame(&ServerMsg::ResyncBegin { channel })).await;
-                    let _ = out
-                        .send(Message::Binary(Frame::new(channel, snap.repaint).encode().into()))
-                        .await;
-                    let _ = out
-                        .send(control_frame(&ServerMsg::ResyncEnd { channel, seq: snap.end_seq }))
-                        .await;
-                    snap.end_seq
+                    send_resync(&session, channel, out, &mut watermark).await;
                 }
-            };
+            }
 
             let pump =
                 tokio::spawn(pump_output(channel, id, session.clone(), rx, out.clone(), watermark));
-            conn.attachments.insert(channel, Attachment { session, pump });
+            conn.attachments.insert(channel, Attachment { session, viewport, pump });
         }
         ClientMsg::Detach { channel } => match conn.attachments.remove(&channel) {
-            Some(a) => a.pump.abort(),
+            Some(a) => a.pump.abort(), // a 在此析构 → viewport 摘除 → 尺寸重算
             None => send_err_ch(out, "no such channel", channel).await,
         },
         ClientMsg::Resize { channel, cols, rows } => match conn.attachments.get(&channel) {
             Some(a) => {
-                if let Err(e) = a.session.resize(cols, rows) {
+                if let Err(e) = a.viewport.set(cols, rows) {
                     tracing::warn!(channel, error = %e, "resize failed");
                     send_err_ch(out, &format!("resize failed: {e:#}"), channel).await;
                 }
@@ -306,6 +317,7 @@ async fn pump_output(
                 // tokio broadcast 只报告一次 Lagged:下一轮 try_recv()/recv() 会
                 // 直接跳到间隙之后的数据,若不在这里显式 resync 就会静默丢字节。
                 let mut lagged = false;
+                let mut resized = None;
                 loop {
                     match rx.try_recv() {
                         Ok(SessionOutput::Data { end_seq, bytes }) => {
@@ -326,6 +338,12 @@ async fn pump_output(
                             }
                             buf.extend_from_slice(&trimmed);
                         }
+                        // 尺寸变化必须夹在正确的位置:它之前的字节按旧尺寸渲染,
+                        // 之后的按新尺寸。先把已合的帧发出去,再发 resized。
+                        Ok(SessionOutput::Resized { cols, rows }) => {
+                            resized = Some((cols, rows));
+                            break;
+                        }
                         Ok(SessionOutput::Exited) => {
                             exited = true;
                             break;
@@ -344,6 +362,11 @@ async fn pump_output(
                         .is_err()
                 {
                     return;
+                }
+                if let Some(size) = resized {
+                    if !send_resized(&out, channel, size).await {
+                        return;
+                    }
                 }
                 if exited {
                     let _ = out
@@ -365,7 +388,10 @@ async fn pump_output(
                                     .await;
                                 return;
                             }
-                            Ok(SessionOutput::Data { .. }) => continue,
+                            // 丢弃的字节和途中的尺寸变化都由紧接着的 resync 兜底:
+                            // 它带着当前的权威尺寸和整屏重绘(G6)。
+                            Ok(SessionOutput::Data { .. })
+                            | Ok(SessionOutput::Resized { .. }) => continue,
                             Err(TryRecvError::Lagged(_)) => continue,
                             Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
                         }
@@ -373,6 +399,11 @@ async fn pump_output(
                     if !send_resync(&session, channel, &out, &mut watermark).await {
                         return;
                     }
+                }
+            }
+            Ok(SessionOutput::Resized { cols, rows }) => {
+                if !send_resized(&out, channel, (cols, rows)).await {
+                    return;
                 }
             }
             Ok(SessionOutput::Exited) => {
@@ -395,7 +426,9 @@ async fn pump_output(
                                 .await;
                             return;
                         }
-                        Ok(SessionOutput::Data { .. }) => continue,
+                        // 丢弃的字节和途中的尺寸变化都由紧接着的 resync 兜底:
+                        // 它带着当前的权威尺寸和整屏重绘(G6)。
+                        Ok(SessionOutput::Data { .. } | SessionOutput::Resized { .. }) => continue,
                         Err(TryRecvError::Lagged(_)) => continue,
                         Err(TryRecvError::Empty) | Err(TryRecvError::Closed) => break,
                     }

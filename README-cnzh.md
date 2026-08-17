@@ -43,6 +43,9 @@ cargo run -p octoterm-server
 ```toml
 listen = "127.0.0.1:7683"
 token = "my-fixed-token"
+# 多端同时 attach 同一个会话时,pty 只有一个尺寸,各端的诉求需要归并:
+# "smallest"(默认,谁都不会看到被截断的画面)、"largest"、"latest"(跟随最近一端)
+window_size = "smallest"
 ```
 
 默认只监听 127.0.0.1。要在其他设备访问,用命令行参数覆盖(优先于配置文件):
