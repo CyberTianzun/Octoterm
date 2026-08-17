@@ -43,3 +43,53 @@ impl Config {
         Ok(config)
     }
 }
+
+/// 命令行 --host/--port 覆盖配置文件的 listen;None 表示沿用配置值
+pub fn effective_listen(
+    base: SocketAddr,
+    host: Option<std::net::IpAddr>,
+    port: Option<u16>,
+) -> SocketAddr {
+    let mut listen = base;
+    if let Some(host) = host {
+        listen.set_ip(host);
+    }
+    if let Some(port) = port {
+        listen.set_port(port);
+    }
+    listen
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> SocketAddr {
+        "127.0.0.1:7683".parse().unwrap()
+    }
+
+    #[test]
+    fn no_overrides_keeps_config() {
+        assert_eq!(effective_listen(base(), None, None), base());
+    }
+
+    #[test]
+    fn host_and_port_override_independently() {
+        assert_eq!(
+            effective_listen(base(), Some("0.0.0.0".parse().unwrap()), None).to_string(),
+            "0.0.0.0:7683"
+        );
+        assert_eq!(
+            effective_listen(base(), None, Some(9000)).to_string(),
+            "127.0.0.1:9000"
+        );
+    }
+
+    #[test]
+    fn both_overrides_apply() {
+        assert_eq!(
+            effective_listen(base(), Some("::1".parse().unwrap()), Some(9000)).to_string(),
+            "[::1]:9000"
+        );
+    }
+}

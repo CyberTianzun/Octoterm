@@ -14,7 +14,13 @@ cargo run -p octoterm-server
 ```
 
 默认只监听 127.0.0.1。要在其他设备访问,编辑配置文件(路径见启动日志)里的
-`listen`,并自行保证网络层安全(Tailscale / 反向代理 + TLS)。
+`listen`,或用命令行参数临时覆盖(优先于配置文件):
+
+```sh
+cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
+```
+
+对外监听请自行保证网络层安全(Tailscale / 反向代理 + TLS)。
 
 ## 架构
 
