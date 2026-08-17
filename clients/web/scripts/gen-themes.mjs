@@ -74,11 +74,45 @@ const EXTRA_THEMES = {
     brightCyan: "#29b8db",
     brightWhite: "#e5e5e5",
   },
+
+  // 「2026 Light」,同上,链是 2026-light -> light_modern -> light_plus -> light_vs,
+  // ANSI 取 ansiColorMap 的 light 默认值。
+  //
+  // 一处和 Dark 不同的地方:这条链里**没有** terminal.background。registry 里
+  // terminal.background 注册的默认值是 null,即回落到面板背景,所以这里取
+  // panel.background #fafafd。这个推断在 Dark 上可以自证:Dark 显式写了
+  // terminal.background #191a1b,而它的 panel.background 恰好也是 #191a1b。
+  //
+  // 另注:VS Code 的 light ANSI 默认值里 red/blue/magenta/cyan 四组的 bright 和
+  // 常规色是相同的 —— 这是上游本来的样子,不是我们抄漏了。
+  "2026 Light": {
+    background: "#fafafd",
+    foreground: "#3b3b3b",
+    cursor: "#202020",
+    selectionBackground: "#0069cc26",
+    black: "#000000",
+    red: "#cd3131",
+    green: "#107c10",
+    yellow: "#949800",
+    blue: "#0451a5",
+    magenta: "#bc05bc",
+    cyan: "#0598bc",
+    white: "#555555",
+    brightBlack: "#666666",
+    brightRed: "#cd3131",
+    brightGreen: "#14ce14",
+    brightYellow: "#b5ba00",
+    brightBlue: "#0451a5",
+    brightMagenta: "#bc05bc",
+    brightCyan: "#0598bc",
+    brightWhite: "#a5a5a5",
+  },
 };
 
 /** 编进 bundle 的默认主题:覆盖亮/暗、覆盖几个主流生态,首屏不用等网络。 */
 const BUILTIN = [
   "2026 Dark",              // 默认(数组第一项即 DEFAULT_THEME_NAME)
+  "2026 Light",
   "JetBrains Islands Dark",
   "TokyoNight",
   "Dracula",

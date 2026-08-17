@@ -26,6 +26,28 @@ export const BUILTIN_THEMES: Record<string, ITheme> = {
     "brightCyan": "#29b8db",
     "brightWhite": "#e5e5e5"
   },
+  "2026 Light": {
+    "background": "#fafafd",
+    "foreground": "#3b3b3b",
+    "cursor": "#202020",
+    "selectionBackground": "#0069cc26",
+    "black": "#000000",
+    "red": "#cd3131",
+    "green": "#107c10",
+    "yellow": "#949800",
+    "blue": "#0451a5",
+    "magenta": "#bc05bc",
+    "cyan": "#0598bc",
+    "white": "#555555",
+    "brightBlack": "#666666",
+    "brightRed": "#cd3131",
+    "brightGreen": "#14ce14",
+    "brightYellow": "#b5ba00",
+    "brightBlue": "#0451a5",
+    "brightMagenta": "#bc05bc",
+    "brightCyan": "#0598bc",
+    "brightWhite": "#a5a5a5"
+  },
   "JetBrains Islands Dark": {
     "black": "#191a1c",
     "red": "#f75464",
