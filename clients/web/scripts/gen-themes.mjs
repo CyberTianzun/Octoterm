@@ -109,9 +109,15 @@ const EXTRA_THEMES = {
   },
 };
 
+/**
+ * 首次打开时按系统的 prefers-color-scheme 二选一。两个都必须在 BUILTIN 里
+ * (首屏就要用,不能等全量目录 fetch 回来)—— 下面有校验。
+ */
+const DEFAULT_THEMES = { dark: "2026 Dark", light: "2026 Light" };
+
 /** 编进 bundle 的默认主题:覆盖亮/暗、覆盖几个主流生态,首屏不用等网络。 */
 const BUILTIN = [
-  "2026 Dark",              // 默认(数组第一项即 DEFAULT_THEME_NAME)
+  "2026 Dark",
   "2026 Light",
   "JetBrains Islands Dark",
   "TokyoNight",
@@ -168,6 +174,15 @@ for (const [name, theme] of Object.entries(EXTRA_THEMES)) {
 const missing = BUILTIN.filter((n) => !(n in catalog));
 if (missing.length) throw new Error(`BUILTIN 里的主题上游没有: ${missing.join(", ")}`);
 
+// 默认主题必须编进 bundle:首屏(localStorage 还没有配置时)就要用,
+// 那会儿全量目录连请求都还没发出去。
+const notBuiltin = Object.entries(DEFAULT_THEMES).filter(([, n]) => !BUILTIN.includes(n));
+if (notBuiltin.length) {
+  throw new Error(
+    `DEFAULT_THEMES 必须同时出现在 BUILTIN 里: ${notBuiltin.map(([k, n]) => `${k}=${n}`).join(", ")}`,
+  );
+}
+
 mkdirSync(OUT, { recursive: true });
 writeFileSync(join(OUT, "catalog.json"), JSON.stringify(catalog));
 
@@ -176,7 +191,8 @@ writeFileSync(
   join(OUT, "builtin.ts"),
   `// 由 scripts/gen-themes.mjs 生成,不要手改。源:mbadolato/iTerm2-Color-Schemes (MIT)\n` +
     `import type { ITheme } from "@xterm/xterm";\n\n` +
-    `export const DEFAULT_THEME_NAME = ${JSON.stringify(BUILTIN[0])};\n\n` +
+    `/** 首次打开时按系统 prefers-color-scheme 二选一,见 config.ts 的 defaultConfig。 */\n` +
+    `export const DEFAULT_THEMES = ${JSON.stringify(DEFAULT_THEMES)} as const;\n\n` +
     `export const BUILTIN_THEMES: Record<string, ITheme> = ${JSON.stringify(builtin, null, 2)};\n`,
 );
 

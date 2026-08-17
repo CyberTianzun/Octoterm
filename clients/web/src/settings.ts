@@ -10,7 +10,7 @@
 import type { ITheme } from "@xterm/xterm";
 import {
   type OctoConfig,
-  defaultConfig,
+  systemDefaultConfig,
   exportConfigJson,
   importConfigJson,
   sanitizeTheme,
@@ -398,9 +398,10 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const reset = el("button", "danger", "恢复全部默认");
     reset.addEventListener("click", () => {
       if (!confirm("把主题、字体、终端设置全部恢复为默认?")) return;
-      host.set(defaultConfig());
+      // 和首次打开走同一条路:重新读一次系统亮暗,而不是钉死深色
+      host.set(systemDefaultConfig());
       ta.value = exportConfigJson(host.get());
-      say("已恢复默认", "ok");
+      say(`已恢复默认(主题跟随系统:${host.get().theme.name})`, "ok");
     });
 
     const bar = el("div", "set-bar");

@@ -13,7 +13,7 @@
  *    warning,让用户导入一个半坏的文件时仍然能进到可用状态。
  */
 import type { ITheme, ITerminalOptions, FontWeight } from "@xterm/xterm";
-import { BUILTIN_THEMES, DEFAULT_THEME_NAME } from "./themes/builtin";
+import { BUILTIN_THEMES, DEFAULT_THEMES } from "./themes/builtin";
 
 export const CONFIG_VERSION = 1;
 export const STORAGE_KEY = "octoterm-config";
@@ -73,10 +73,17 @@ const FONT_WEIGHTS: readonly string[] = [
 export const DEFAULT_FONT_FAMILY =
   'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
-export function defaultConfig(): OctoConfig {
+/**
+ * 默认配置。`prefersDark` 决定默认主题取 2026 Dark 还是 2026 Light。
+ *
+ * 参数化而不是在这里读 matchMedia,是为了保住这个模块「纯函数、不碰 DOM」的
+ * 性质(见文件顶部)——系统偏好由调用方在副作用边界上读,见 systemPrefersDark。
+ */
+export function defaultConfig(prefersDark = true): OctoConfig {
+  const themeName = prefersDark ? DEFAULT_THEMES.dark : DEFAULT_THEMES.light;
   return {
     version: CONFIG_VERSION,
-    theme: { name: DEFAULT_THEME_NAME, colors: { ...BUILTIN_THEMES[DEFAULT_THEME_NAME] } },
+    theme: { name: themeName, colors: { ...BUILTIN_THEMES[themeName] } },
     font: {
       family: DEFAULT_FONT_FAMILY,
       size: 14,
@@ -310,16 +317,38 @@ export function importConfigJson(
   return { config, warnings };
 }
 
+/* ---------- 浏览器环境 ---------- */
+
+/** 系统是否偏好深色。matchMedia 缺席(老浏览器 / 非 DOM 环境)时按深色算。 */
+export function systemPrefersDark(): boolean {
+  try {
+    return window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? true;
+  } catch {
+    return true;
+  }
+}
+
+/** 跟随系统亮暗的默认配置。首次打开和「恢复全部默认」都走这里。 */
+export function systemDefaultConfig(): OctoConfig {
+  return defaultConfig(systemPrefersDark());
+}
+
 /* ---------- localStorage ---------- */
 
-/** 读持久化配置。隐私模式 / 配额异常 / 存了个坏值,一律退回默认配置。 */
+/**
+ * 读持久化配置。隐私模式 / 配额异常 / 存了个坏值,一律退回默认配置。
+ *
+ * 没有存过配置时按系统亮暗挑默认主题。注意这一步**不写回** localStorage:
+ * 在用户真正改过一次设置之前,主题就一直跟着系统走;一旦改过(哪怕改的是字号),
+ * 整份配置被持久化,此后系统再切换亮暗也不会覆盖用户自己的选择。
+ */
 export function loadConfig(resolveTheme?: (name: string) => ITheme | undefined): OctoConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw === null) return defaultConfig();
+    if (raw === null) return systemDefaultConfig();
     return sanitizeConfig(JSON.parse(raw), { resolveTheme });
   } catch {
-    return defaultConfig();
+    return systemDefaultConfig();
   }
 }
 

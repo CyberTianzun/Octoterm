@@ -8,9 +8,14 @@ import { execSync } from "node:child_process";
 // @xterm/xterm 只有 `import type`,esbuild 会整个剥掉,所以这里不会把浏览器
 // 端的 xterm 拽进 node 进程。
 const here = dirname(fileURLToPath(import.meta.url));
-execSync("npx esbuild src/config.ts --bundle --format=esm --outfile=test/.config.build.mjs", {
-  cwd: join(here, ".."),
-});
+for (const [src, out] of [
+  ["src/config.ts", "test/.config.build.mjs"],
+  // 默认主题跟随系统亮暗那几条要拿真的内置主题表和真的配色派生来验
+  ["src/themes/builtin.ts", "test/.builtin.build.mjs"],
+  ["src/appearance.ts", "test/.appearance.build.mjs"],
+]) {
+  execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${out}`, { cwd: join(here, "..") });
+}
 const cfgmod = await import("./.config.build.mjs");
 const {
   defaultConfig,
@@ -28,11 +33,46 @@ const collect = () => {
   return { warnings, warn: (m) => warnings.push(m) };
 };
 
-test("默认配置是 sanitize 的不动点", () => {
-  const d = defaultConfig();
-  const w = collect();
-  assert.deepEqual(sanitizeConfig(d, { warn: w.warn }), d);
-  assert.deepEqual(w.warnings, []);
+test("默认主题跟随系统亮暗", async () => {
+  const { DEFAULT_THEMES, BUILTIN_THEMES } = await import("./.builtin.build.mjs");
+  const dark = defaultConfig(true);
+  const light = defaultConfig(false);
+  assert.equal(dark.theme.name, DEFAULT_THEMES.dark);
+  assert.equal(light.theme.name, DEFAULT_THEMES.light);
+  assert.notEqual(dark.theme.name, light.theme.name);
+  // 颜色是内联的完整副本,不是只存个名字
+  assert.deepEqual(dark.theme.colors, BUILTIN_THEMES[DEFAULT_THEMES.dark]);
+  assert.deepEqual(light.theme.colors, BUILTIN_THEMES[DEFAULT_THEMES.light]);
+  // 且互不共享引用 —— 改一个不能污染内置表
+  dark.theme.colors.background = "#deadbe";
+  assert.notEqual(BUILTIN_THEMES[DEFAULT_THEMES.dark].background, "#deadbe");
+});
+
+test("两个默认主题都必须编进 bundle(首屏就要用,等不了 fetch)", async () => {
+  const { DEFAULT_THEMES, BUILTIN_THEMES } = await import("./.builtin.build.mjs");
+  for (const name of Object.values(DEFAULT_THEMES)) {
+    assert.ok(name in BUILTIN_THEMES, `${name} 不在 BUILTIN_THEMES 里`);
+  }
+});
+
+test("亮色默认主题确实是亮的,暗色确实是暗的", async () => {
+  const { deriveUiColors } = await import("./.appearance.build.mjs");
+  assert.equal(deriveUiColors(defaultConfig(true).theme.colors).colorScheme, "dark");
+  assert.equal(deriveUiColors(defaultConfig(false).theme.colors).colorScheme, "light");
+});
+
+test("除主题外,亮暗两份默认配置完全一致", () => {
+  const strip = (c) => ({ ...c, theme: null });
+  assert.deepEqual(strip(defaultConfig(true)), strip(defaultConfig(false)));
+});
+
+test("默认配置是 sanitize 的不动点(亮暗两份都是)", () => {
+  for (const prefersDark of [true, false]) {
+    const d = defaultConfig(prefersDark);
+    const w = collect();
+    assert.deepEqual(sanitizeConfig(d, { warn: w.warn }), d);
+    assert.deepEqual(w.warnings, [], `prefersDark=${prefersDark}`);
+  }
 });
 
 test("导出再导入完全还原", () => {

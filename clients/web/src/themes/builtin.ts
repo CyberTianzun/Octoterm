@@ -1,7 +1,8 @@
 // 由 scripts/gen-themes.mjs 生成,不要手改。源:mbadolato/iTerm2-Color-Schemes (MIT)
 import type { ITheme } from "@xterm/xterm";
 
-export const DEFAULT_THEME_NAME = "2026 Dark";
+/** 首次打开时按系统 prefers-color-scheme 二选一,见 config.ts 的 defaultConfig。 */
+export const DEFAULT_THEMES = {"dark":"2026 Dark","light":"2026 Light"} as const;
 
 export const BUILTIN_THEMES: Record<string, ITheme> = {
   "2026 Dark": {
