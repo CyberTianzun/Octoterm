@@ -91,3 +91,7 @@ Resync restores content, cursor and common modes (application cursor keys,
 bracketed paste, mouse reporting), but not the alt screen or scroll regions
 (DECSTBM). After a rough-network reconnect, full-screen apps may need a Ctrl-L
 or an app-level redraw.
+
+## License
+
+[MIT](LICENSE)

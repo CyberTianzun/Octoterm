@@ -76,3 +76,7 @@ octoterm 目前是**实验性 demo**,已完成的界面只有浏览器端。
 
 resync 恢复内容、光标与常用模式(应用光标键/括号粘贴/鼠标上报),不恢复
 alt-screen 与滚动区域(DECSTBM);弱网重连后全屏应用建议 Ctrl-L 或触发重绘。
+
+## 许可证
+
+[MIT](LICENSE)

@@ -1,6 +1,7 @@
 {
   "name": "octoterm-web",
   "private": true,
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outfile=dist/app.js --format=esm --loader:.css=css && node scripts/copy-static.mjs",
