@@ -71,12 +71,15 @@ mod tests {
 
     #[test]
     fn builds_launchers_with_tilde_expanded_cwd() {
-        let out = build(&[spec("prod ssh", &["ssh", "prod01"], Some("~/work"))], Some(Path::new("/home/h")));
+        let home = Path::new("/home/h");
+        let out = build(&[spec("prod ssh", &["ssh", "prod01"], Some("~/work"))], Some(home));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].id, "config:prod ssh");
         assert_eq!(out[0].name, "prod ssh");
         assert_eq!(out[0].command, ["ssh", "prod01"]);
-        assert_eq!(out[0].cwd.as_deref(), Some("/home/h/work"));
+        // 分隔符跟平台走,这里只关心 `~` 展开了(分隔符本身在 cmdline 里测)
+        let want = home.join("work");
+        assert_eq!(out[0].cwd.as_deref(), Some(&*want.to_string_lossy()));
         assert_eq!(out[0].detail, "ssh prod01");
     }
 

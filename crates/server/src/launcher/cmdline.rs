@@ -319,7 +319,12 @@ mod tests {
     fn tilde_expansion_only_at_the_front() {
         let home = Path::new("/Users/hiro");
         assert_eq!(expand_tilde("~", Some(home)), "/Users/hiro");
+        // 展开出来的是平台原生路径:Windows 上 `Path::join` 给的是反斜杠。
+        // 这个值最后要交给 spawn 当 cwd,跟着平台走才对。
+        #[cfg(not(windows))]
         assert_eq!(expand_tilde("~/work", Some(home)), "/Users/hiro/work");
+        #[cfg(windows)]
+        assert_eq!(expand_tilde("~/work", Some(home)), "/Users/hiro\\work");
         assert_eq!(expand_tilde("/a/~/b", Some(home)), "/a/~/b");
         assert_eq!(expand_tilde("~work", Some(home)), "~work");
         assert_eq!(expand_tilde("~/work", None), "~/work");

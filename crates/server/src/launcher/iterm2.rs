@@ -237,10 +237,13 @@ mod tests {
             working_directory: Some("~/work".into()),
             ..raw("Work")
         };
-        let out = build(&[r], &default_cmd(), Some(Path::new("/Users/hiro")));
+        let home = Path::new("/Users/hiro");
+        let out = build(&[r], &default_cmd(), Some(home));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].command, ["/bin/zsh"]);
-        assert_eq!(out[0].cwd.as_deref(), Some("/Users/hiro/work"));
+        // 分隔符跟平台走,这里只关心 `~` 展开了(分隔符本身在 cmdline 里测)
+        let want = home.join("work");
+        assert_eq!(out[0].cwd.as_deref(), Some(&*want.to_string_lossy()));
     }
 
     #[test]
