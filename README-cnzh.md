@@ -30,6 +30,7 @@ server**。
 
 ```sh
 cd clients/web && npm install && npm run build && cd ../..
+# 或者在仓库任意位置执行:./build-frontend.sh (Windows:build-frontend.bat)
 cargo run -p octoterm-server
 # 启动日志会打印完整访问 URL(Jupyter 式,token 每次启动随机生成),直接点开即可:
 #     http://127.0.0.1:7683/#token=<本次随机 token>
