@@ -3,4 +3,7 @@ node_modules/
 clients/web/dist/*
 !clients/web/dist/.gitkeep
 clients/web/test/.protocol.build.mjs
+clients/web/test/.config.build.mjs
+clients/web/test/.appearance.build.mjs
+clients/web/test/.builtin.build.mjs
 .superpowers/

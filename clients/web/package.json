@@ -5,12 +5,14 @@
   "type": "module",
   "scripts": {
     "build": "esbuild src/main.ts --bundle --outfile=dist/app.js --format=esm --loader:.css=css && node scripts/copy-static.mjs",
+    "gen:themes": "node scripts/gen-themes.mjs",
     "test": "node --test test/*.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@xterm/xterm": "^5.5.0",
-    "@xterm/addon-fit": "^0.10.0"
+    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-webgl": "0.18.0",
+    "@xterm/xterm": "^5.5.0"
   },
   "devDependencies": {
     "esbuild": "^0.24.0",
