@@ -41,26 +41,38 @@ impl SessionManager {
     ) -> Result<Arc<Session>> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = name.unwrap_or_else(|| format!("octoterm-{id}"));
-        let session = Session::spawn(id, name, 80, 24, command, self.buffer_cap)?;
+        let session = match Session::spawn(id, name, 80, 24, command, self.buffer_cap) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(session = id, error = %e, "session spawn failed");
+                return Err(e);
+            }
+        };
         self.sessions.lock().unwrap().insert(id, session.clone());
         self.emit(SessionEventKind::Created, session.info());
+        tracing::info!(session = id, name = %session.info().name, "session created");
 
         // 监视退出:自动移除 + Closed 事件
         let mgr = self.clone();
         let watch = session.clone();
         tokio::spawn(async move {
+            // 必须先订阅再查 has_exited,否则"检查时还活着、订阅前已退出"会永远等
             let mut rx = watch.subscribe();
-            // 极快退出的子进程可能在订阅前就广播了 Exited;
-            // has_exited 在广播前置位,订阅后补查一次即可闭合竞态
             if !watch.has_exited() {
                 loop {
                     match rx.recv().await {
                         Ok(SessionOutput::Exited) | Err(broadcast::error::RecvError::Closed) => break,
-                        _ => continue,
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            if watch.has_exited() {
+                                break;
+                            }
+                        }
+                        Ok(_) => continue,
                     }
                 }
             }
             if mgr.sessions.lock().unwrap().remove(&id).is_some() {
+                tracing::info!(session = id, "session exited, removed");
                 mgr.emit(SessionEventKind::Closed, watch.info());
             }
         });
@@ -78,12 +90,20 @@ impl SessionManager {
     }
 
     pub fn kill(&self, id: u64) -> bool {
-        match self.get(id) {
+        // 先从列表摘掉并广播 Closed,UI 不必等 ConPTY 读线程收尸。
+        // 子进程/PTY 仍由 Session::kill + wait 线程清理。
+        let session = self.sessions.lock().unwrap().remove(&id);
+        match session {
             Some(s) => {
+                tracing::info!(session = id, "killing session");
                 s.kill();
+                self.emit(SessionEventKind::Closed, s.info());
                 true
             }
-            None => false,
+            None => {
+                tracing::warn!(session = id, "kill: no such session");
+                false
+            }
         }
     }
 

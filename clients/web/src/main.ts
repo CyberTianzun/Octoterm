@@ -60,6 +60,9 @@ function renderSidebar() {
       if (act === "kill") {
         ev.stopPropagation();
         client.send({ type: "kill-session", id: s.id });
+        if (attachedId === s.id) closeTerminal();
+        sessions = sessions.filter((x) => x.id !== s.id);
+        renderSidebar();
         return;
       }
       if (act === "rename") {
@@ -77,6 +80,17 @@ function renderSidebar() {
 function setDrawer(open: boolean) {
   document.body.classList.toggle("sidebar-open", open);
   $("scrim").hidden = !open;
+}
+
+let errorTimer = 0;
+function showError(message: string) {
+  const el = $("error-banner");
+  el.textContent = message;
+  el.hidden = false;
+  window.clearTimeout(errorTimer);
+  errorTimer = window.setTimeout(() => {
+    el.hidden = true;
+  }, 8000);
 }
 
 /* ---------- 工作区:纯终端 ---------- */
@@ -157,6 +171,9 @@ client.onControl = (msg) => {
       renderSidebar();
       break;
     case "session-event":
+      if (msg.event === "closed" && attachedId === msg.session?.id) {
+        closeTerminal();
+      }
       client.send({ type: "list-sessions" });
       break;
     case "preview-data": {
@@ -172,6 +189,7 @@ client.onControl = (msg) => {
       break;
     case "error":
       console.warn("octoterm error:", msg.message);
+      showError(msg.message);
       // 重连打到一个已经不存在的会话上(channel 对应的 attach 失败):
       // 该终端已没有意义,退回空态,而不是停留在一个死连接上。
       if (msg.channel === TERM_CHANNEL && attachedId !== null) closeTerminal();

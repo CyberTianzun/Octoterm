@@ -45,7 +45,9 @@ async fn create_list_rename_kill() {
     }
 
     assert!(m.kill(s.id));
-    // 子进程退出后 manager 自动移除并广播 Closed
+    // kill 必须立刻从列表摘掉,不能等 ConPTY 读线程收尸(Windows 上可能永远等不到)
+    assert!(m.list().is_empty());
+    // 同时仍广播 Closed,客户端靠这个刷新 UI
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         assert!(tokio::time::Instant::now() < deadline);

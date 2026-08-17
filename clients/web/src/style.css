@@ -117,6 +117,17 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   text-align: center;
   padding: 4px;
 }
+#error-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 7;
+  background: #7a2030;
+  color: #fff;
+  text-align: center;
+  padding: 6px 10px;
+}
 #workspace-empty {
   flex: 1;
   display: flex;

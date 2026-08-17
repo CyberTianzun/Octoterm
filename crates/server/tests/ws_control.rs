@@ -72,23 +72,43 @@ async fn preview_returns_base64_repaint() {
     #[cfg(unix)]
     let command = Some(vec!["/bin/sh".into(), "-c".into(), "printf PREVIEW_MARK; sleep 30".into()]);
     #[cfg(windows)]
-    let command = Some(vec!["powershell.exe".into(), "-Command".into(), "Write-Host PREVIEW_MARK; Start-Sleep 30".into()]);
+    let command = {
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        Some(vec![
+            format!(r"{system_root}\System32\WindowsPowerShell\v1.0\powershell.exe"),
+            "-NoLogo".into(),
+            "-Command".into(),
+            "Write-Host PREVIEW_MARK; Start-Sleep 30".into(),
+        ])
+    };
 
     ws.send(control(&ClientMsg::NewSession { name: None, command })).await.unwrap();
     let id = match next_control(&mut ws).await {
         ServerMsg::SessionEvent { session, .. } => session.id,
         other => panic!("unexpected: {other:?}"),
     };
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await; // 等输出进 grid
 
-    ws.send(control(&ClientMsg::Preview { id })).await.unwrap();
-    match next_control(&mut ws).await {
-        ServerMsg::PreviewData { id: got, data } => {
-            assert_eq!(got, id);
-            let bytes = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
-            assert!(String::from_utf8_lossy(&bytes).contains("PREVIEW_MARK"));
+    // Windows 上 powershell 要先应答 ConPTY 的 DSR 才会真正跑命令,固定 sleep 不够稳。
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut last = String::new();
+    loop {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "preview never contained PREVIEW_MARK, last={last:?}"
+        );
+        ws.send(control(&ClientMsg::Preview { id })).await.unwrap();
+        match next_control(&mut ws).await {
+            ServerMsg::PreviewData { id: got, data } => {
+                assert_eq!(got, id);
+                let bytes = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+                last = String::from_utf8_lossy(&bytes).into_owned();
+                if last.contains("PREVIEW_MARK") {
+                    break;
+                }
+            }
+            other => panic!("unexpected: {other:?}"),
         }
-        other => panic!("unexpected: {other:?}"),
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
     ws.send(control(&ClientMsg::KillSession { id })).await.unwrap();
 }

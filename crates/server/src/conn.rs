@@ -154,13 +154,18 @@ async fn read_loop(
         if frame.channel == CONTROL_CHANNEL {
             match serde_json::from_slice::<ClientMsg>(&frame.payload) {
                 Ok(msg) => handle_control(msg, state, out, conn).await,
-                Err(_) => send_err(out, "malformed control message").await,
+                Err(e) => {
+                    tracing::warn!(error = %e, "malformed control message");
+                    send_err(out, "malformed control message").await;
+                }
             }
         } else {
             match conn.attachments.get(&frame.channel) {
                 Some(a) => {
-                    if a.session.write_input(&frame.payload).is_err() {
-                        send_err_ch(out, "session input failed", frame.channel).await;
+                    if let Err(e) = a.session.write_input(&frame.payload) {
+                        tracing::warn!(channel = frame.channel, error = %e, "session input failed");
+                        send_err_ch(out, &format!("session input failed: {e:#}"), frame.channel)
+                            .await;
                     }
                 }
                 None => send_err_ch(out, "no such channel", frame.channel).await,
@@ -195,13 +200,18 @@ async fn handle_control(
                 .await;
         }
         ClientMsg::NewSession { name, command } => {
-            if let Err(e) = state.manager.create(name, command) {
-                send_err(out, &format!("spawn failed: {e}")).await;
+            match state.manager.create(name, command) {
+                Ok(s) => tracing::info!(session = s.id, "new-session ok"),
+                Err(e) => {
+                    tracing::error!(error = %e, "new-session failed");
+                    send_err(out, &format!("spawn failed: {e:#}")).await;
+                }
             }
             // 成功时 Created 事件经事件推送到达客户端
         }
         ClientMsg::KillSession { id } => {
             if !state.manager.kill(id) {
+                tracing::warn!(session = id, "kill-session: no such session");
                 send_err(out, "no such session").await;
             }
         }
@@ -223,6 +233,7 @@ async fn handle_control(
                 return send_err_ch(out, "channel unavailable", channel).await;
             }
             let Some(session) = state.manager.get(id) else {
+                tracing::warn!(session = id, channel, "attach: no such session");
                 return send_err_ch(out, "no such session", channel).await;
             };
             let rx = session.subscribe(); // 先订阅再快照,不丢中间字节
@@ -267,7 +278,10 @@ async fn handle_control(
         },
         ClientMsg::Resize { channel, cols, rows } => match conn.attachments.get(&channel) {
             Some(a) => {
-                let _ = a.session.resize(cols, rows);
+                if let Err(e) = a.session.resize(cols, rows) {
+                    tracing::warn!(channel, error = %e, "resize failed");
+                    send_err_ch(out, &format!("resize failed: {e:#}"), channel).await;
+                }
             }
             None => send_err_ch(out, "no such channel", channel).await,
         },

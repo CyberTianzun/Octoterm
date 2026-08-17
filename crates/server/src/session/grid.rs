@@ -1,3 +1,5 @@
+use std::sync::{Arc, Mutex};
+
 use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
@@ -5,28 +7,48 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::{Color, NamedColor, Processor};
 
+/// ConPTY / 应用会发 DSR 等查询(如 `ESC [ 6 n`);alacritty 解析后通过
+/// `Event::PtyWrite` 给出应答。必须写回 PTY,否则 Windows 上 shell 会一直
+/// 卡在等光标位置,表现为"命令行没启动"。
 #[derive(Clone)]
-struct VoidListener;
-impl EventListener for VoidListener {
-    fn send_event(&self, _event: Event) {}
+struct ReplyListener {
+    pending: Arc<Mutex<Vec<u8>>>,
+}
+
+impl EventListener for ReplyListener {
+    fn send_event(&self, event: Event) {
+        if let Event::PtyWrite(text) = event {
+            self.pending.lock().unwrap().extend_from_slice(text.as_bytes());
+        }
+    }
 }
 
 pub struct SessionGrid {
-    term: Term<VoidListener>,
+    term: Term<ReplyListener>,
     parser: Processor,
     cols: u16,
     rows: u16,
+    pty_replies: Arc<Mutex<Vec<u8>>>,
 }
 
 impl SessionGrid {
     pub fn new(cols: u16, rows: u16) -> Self {
         let size = TermSize::new(cols as usize, rows as usize);
-        let term = Term::new(Config::default(), &size, VoidListener);
-        Self { term, parser: Processor::new(), cols, rows }
+        let pty_replies = Arc::new(Mutex::new(Vec::new()));
+        let term = Term::new(
+            Config::default(),
+            &size,
+            ReplyListener { pending: pty_replies.clone() },
+        );
+        Self { term, parser: Processor::new(), cols, rows, pty_replies }
     }
 
     pub fn advance(&mut self, bytes: &[u8]) {
         self.parser.advance(&mut self.term, bytes);
+    }
+
+    pub fn take_pty_replies(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.pty_replies.lock().unwrap())
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) {
@@ -174,6 +196,17 @@ fn sgr_string(fg: Color, bg: Color, flags: Flags) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dsr_cursor_query_produces_pty_reply() {
+        let mut g = SessionGrid::new(80, 24);
+        g.advance(b"\x1b[6n");
+        let reply = String::from_utf8(g.take_pty_replies()).unwrap();
+        assert!(
+            reply.contains("\x1b[") && reply.contains('R'),
+            "expected CPR reply like ESC[row;colR, got {reply:?}"
+        );
+    }
 
     #[test]
     fn plain_text_lands_in_grid() {
