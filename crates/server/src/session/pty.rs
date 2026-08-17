@@ -113,28 +113,6 @@ impl Drop for Viewport {
     }
 }
 
-fn default_shell() -> Vec<String> {
-    #[cfg(unix)]
-    {
-        vec![std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into())]
-    }
-    #[cfg(windows)]
-    {
-        // portable-pty 的 CreateProcessW 把 exe 放进 lpApplicationName,不会再搜 PATH。
-        // 必须给绝对路径,否则 ConPTY 下经常 "系统找不到指定的文件"。
-        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
-        let powershell =
-            PathBuf::from(system_root).join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
-        if powershell.is_file() {
-            vec![powershell.to_string_lossy().into_owned(), "-NoLogo".into()]
-        } else if let Ok(comspec) = std::env::var("ComSpec") {
-            vec![comspec]
-        } else {
-            vec!["cmd.exe".into()]
-        }
-    }
-}
-
 /// 选一个真实存在的启动目录。Windows 上 `$HOME` 经常没设,或是 Git Bash
 /// 的 `/c/Users/...`,CreateProcess/ConPTY 都不能用。
 fn default_cwd() -> Option<PathBuf> {
@@ -162,21 +140,43 @@ fn default_cwd() -> Option<PathBuf> {
     std::env::current_dir().ok().filter(|p| p.is_dir())
 }
 
+/// 「跑什么、在哪跑」。这两个总是一起来的 —— 它们出自同一条 launcher(见
+/// `crate::launcher`),分开传只会让调用点多两个可以搞混的 `None`。
+#[derive(Debug, Clone, Default)]
+pub struct Launch {
+    /// `None` = 用内置默认 shell
+    pub command: Option<Vec<String>>,
+    /// `None` 或指向不存在的目录 = 用服务端默认启动目录
+    pub cwd: Option<String>,
+}
+
 impl Session {
     pub fn spawn(
         id: u64,
         name: String,
         cols: u16,
         rows: u16,
-        command: Option<Vec<String>>,
+        launch: Launch,
         buffer_cap: usize,
         window_size: WindowSize,
     ) -> Result<Arc<Session>> {
-        let argv = command.unwrap_or_else(default_shell);
+        let argv = launch.command.unwrap_or_else(crate::launcher::builtin::default_command);
         if argv.is_empty() || argv[0].is_empty() {
             bail!("empty command");
         }
-        let cwd = default_cwd();
+        // 请求的目录不存在就回落到默认,而不是让整个 spawn 失败:profile 里的
+        // 目录可能是在另一台机器上写的,为此拒绝开会话是过度反应。
+        let cwd = launch
+            .cwd
+            .map(PathBuf::from)
+            .filter(|p| {
+                let ok = p.is_dir();
+                if !ok {
+                    tracing::warn!(session = id, cwd = %p.display(), "请求的启动目录不存在,回落到默认");
+                }
+                ok
+            })
+            .or_else(default_cwd);
         tracing::info!(session = id, ?argv, cwd = ?cwd, "spawning session");
 
         let pty = native_pty_system()
@@ -435,27 +435,24 @@ mod tests {
     }
 
     #[test]
-    fn default_shell_program_is_usable() {
-        let sh = default_shell();
-        assert!(!sh.is_empty() && !sh[0].is_empty());
-        #[cfg(windows)]
-        {
-            assert!(
-                std::path::Path::new(&sh[0]).is_file(),
-                "default shell must be an absolute existing path, got {:?}",
-                sh[0]
-            );
-        }
-    }
-
-    #[test]
     fn empty_command_is_rejected() {
-        let spawn = Session::spawn(1, "t".into(), 80, 24, Some(vec![]), 64, WindowSize::default());
+        let launch = Launch { command: Some(vec![]), cwd: None };
+        let spawn = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default());
         let err = match spawn {
             Ok(_) => panic!("empty command should fail"),
             Err(e) => e,
         };
         assert!(err.to_string().contains("empty command"), "{err}");
+    }
+
+    /// 不存在的 cwd 不该让 spawn 失败 —— profile 里的目录可能来自另一台机器。
+    #[test]
+    fn nonexistent_cwd_falls_back_instead_of_failing() {
+        let launch =
+            Launch { command: None, cwd: Some("/definitely/not/a/real/dir/for/octoterm".into()) };
+        let session = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default())
+            .expect("spawn should survive a bad cwd");
+        session.kill();
     }
 
     /// 按 attach 顺序建表:ord 就是数组下标,Latest 取最后一个。

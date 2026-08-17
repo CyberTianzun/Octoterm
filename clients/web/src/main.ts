@@ -12,6 +12,8 @@ import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions, toPreviewOp
 import { resolveTheme } from "./theme-catalog";
 import { applyUiColors } from "./appearance";
 import { mountSettings } from "./settings";
+import { type Launcher, fetchLaunchers } from "./launchers";
+import { mountNewSessionMenu } from "./new-session";
 
 const $ = (id: string) => document.getElementById(id)!;
 const client = new OctoClient();
@@ -244,9 +246,24 @@ window.visualViewport?.addEventListener("resize", refit);
 $("menu").addEventListener("click", () => setDrawer(true));
 $("scrim").addEventListener("click", () => setDrawer(false));
 $("open-settings").addEventListener("click", () => settings.open());
-$("new-session").addEventListener("click", () =>
-  client.send({ type: "new-session", name: prompt("Session name (optional):") || null, command: null }),
-);
+
+/**
+ * 新建会话:选一个启动项就建,关掉菜单就是取消。
+ *
+ * 名字直接用启动项的名字(「zsh」「Prod SSH」),不再问一遍 —— 建完在侧边栏点 ✎
+ * 就能改,为了改名先挡一个弹窗不划算。
+ */
+mountNewSessionMenu($("new-session"), {
+  load: () => fetchLaunchers(authToken),
+  pick: (l: Launcher) =>
+    client.send({
+      type: "new-session",
+      name: l.name,
+      // 空 argv 是兜底项的约定:让服务端用它自己的默认 shell
+      command: l.command.length > 0 ? l.command : null,
+      cwd: l.cwd,
+    }),
+});
 
 client.onOpen = () => {
   $("reconnect-banner").hidden = true;
@@ -309,4 +326,6 @@ client.onControl = (msg) => {
 
 // 界面配色先于连接落地:否则首帧会闪一下 style.css 里那套写死的默认色
 applyUiColors(config);
-client.connect(wsUrl(), token());
+// 只取一次:token() 在 localStorage 里没有时会 prompt,取两次就要问两遍
+const authToken = token();
+client.connect(wsUrl(), authToken);

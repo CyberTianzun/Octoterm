@@ -211,8 +211,8 @@ async fn handle_control(
                 .send(control_frame(&ServerMsg::Sessions { sessions: state.manager.list() }))
                 .await;
         }
-        ClientMsg::NewSession { name, command } => {
-            match state.manager.create(name, command) {
+        ClientMsg::NewSession { name, command, cwd } => {
+            match state.manager.create(name, command, cwd) {
                 Ok(s) => tracing::info!(session = s.id, "new-session ok"),
                 Err(e) => {
                     tracing::error!(error = %e, "new-session failed");

@@ -8,7 +8,7 @@ use tokio::sync::broadcast;
 
 use crate::config::WindowSize;
 
-use super::pty::{Session, SessionOutput};
+use super::pty::{Launch, Session, SessionOutput};
 
 pub struct SessionManager {
     buffer_cap: usize,
@@ -42,11 +42,13 @@ impl SessionManager {
         self: &Arc<Self>,
         name: Option<String>,
         command: Option<Vec<String>>,
+        cwd: Option<String>,
     ) -> Result<Arc<Session>> {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let name = name.unwrap_or_else(|| format!("octoterm-{id}"));
+        let launch = Launch { command, cwd };
         let session =
-            match Session::spawn(id, name, 80, 24, command, self.buffer_cap, self.window_size) {
+            match Session::spawn(id, name, 80, 24, launch, self.buffer_cap, self.window_size) {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!(session = id, error = %e, "session spawn failed");

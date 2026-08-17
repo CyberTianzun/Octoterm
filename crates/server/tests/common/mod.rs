@@ -16,11 +16,27 @@ pub async fn start_test_server_with_cap(token: &str, cap: usize) -> String {
 }
 
 pub async fn start_test_server_with(token: &str, cap: usize, window_size: WindowSize) -> String {
+    let addr = start_test_server_at(token, cap, window_size, Vec::new()).await;
+    format!("ws://{addr}/ws")
+}
+
+/// 起服务并返回监听地址,给需要打 HTTP 端点的测试用。
+/// `specs` 是 config.toml 里的 `[[launcher]]`,空表示只有内置 provider。
+pub async fn start_test_server_at(
+    token: &str,
+    cap: usize,
+    window_size: WindowSize,
+    specs: Vec<octoterm_server::config::LauncherSpec>,
+) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let state = AppState { manager: SessionManager::new(cap, window_size), token: token.into() };
+    let state = AppState {
+        manager: SessionManager::new(cap, window_size),
+        token: token.into(),
+        launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&specs)),
+    };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
-    format!("ws://{addr}/ws")
+    addr
 }
 
 pub fn control(msg: &ClientMsg) -> Message {
@@ -65,7 +81,7 @@ pub async fn next_control(ws: &mut Ws) -> ServerMsg {
 }
 
 pub async fn create_session(ws: &mut Ws, command: Option<Vec<String>>) -> u64 {
-    ws.send(control(&ClientMsg::NewSession { name: None, command })).await.unwrap();
+    ws.send(control(&ClientMsg::NewSession { name: None, command, cwd: None })).await.unwrap();
     match next_control(ws).await {
         ServerMsg::SessionEvent { session, .. } => session.id,
         other => panic!("unexpected: {other:?}"),

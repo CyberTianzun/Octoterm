@@ -37,6 +37,7 @@ async fn main() -> anyhow::Result<()> {
     let listen = octoterm_server::config::effective_listen(config.listen, args.host, args.port);
     let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
+    let launchers = std::sync::Arc::new(octoterm_server::launcher::providers(&config.launchers));
     let listener = tokio::net::TcpListener::bind(listen).await?;
 
     // Jupyter 式:每次启动打印可直接点开的访问 URL(0.0.0.0/:: 显示为 127.0.0.1)
@@ -53,5 +54,5 @@ async fn main() -> anyhow::Result<()> {
     if generated {
         eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
     }
-    serve(listener, AppState { manager, token }).await
+    serve(listener, AppState { manager, token, launchers }).await
 }

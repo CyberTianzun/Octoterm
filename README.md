@@ -56,7 +56,33 @@ token = "my-fixed-token"
 # requested sizes are merged: "smallest" (default, nobody sees a truncated
 # screen), "largest", or "latest" (follow the most recent client).
 window_size = "smallest"
+
+# Extra entries for the "new session" menu. Optional — the menu already lists
+# your default shell plus anything it finds in iTerm2 / Windows Terminal.
+[[launcher]]
+name = "prod ssh"
+command = ["ssh", "prod01"]   # argv, not a command line: no quoting rules to guess
+cwd = "~/work"                # optional
 ```
+
+### The "new session" menu
+
+Clicking **+** opens a menu instead of a prompt. Its entries come from
+*providers* on the server, so there is nothing to configure for the common case:
+
+| provider | where it looks |
+| --- | --- |
+| built-in | `$SHELL` (unix) / `powershell.exe`, `%ComSpec%` (Windows) |
+| config | `[[launcher]]` in the config file above |
+| iTerm2 | `com.googlecode.iterm2.plist` + `DynamicProfiles/` (macOS) |
+| Windows Terminal | `settings.json` (packaged, preview and portable installs) |
+
+Third-party configs are **read, never written**. Only profiles that differ in
+what they run — a custom command or a custom working directory — are listed;
+colour-scheme-only profiles are noise here. A provider that fails (missing,
+corrupt, unreadable) is skipped with a log line; the menu still works.
+
+Adding a source is one `LauncherProvider` impl in `crates/server/src/launcher/`.
 
 By default the server listens on 127.0.0.1 only. To reach it from other
 devices, override on the command line (takes precedence over the config file):

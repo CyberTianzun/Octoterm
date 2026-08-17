@@ -7,3 +7,4 @@ clients/web/test/.config.build.mjs
 clients/web/test/.appearance.build.mjs
 clients/web/test/.builtin.build.mjs
 .superpowers/
+clients/web/test/.launchers.build.mjs

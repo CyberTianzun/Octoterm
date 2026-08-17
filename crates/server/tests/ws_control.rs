@@ -29,7 +29,7 @@ async fn session_crud_over_ws() {
     let mut ws = connect(&url).await;
 
     // 创建:先收到事件推送,再收到列表响应(create 内部先 emit 事件)
-    ws.send(control(&ClientMsg::NewSession { name: Some("alpha".into()), command: None }))
+    ws.send(control(&ClientMsg::NewSession { name: Some("alpha".into()), command: None, cwd: None }))
         .await
         .unwrap();
     let evt = next_control(&mut ws).await;
@@ -82,7 +82,7 @@ async fn preview_returns_base64_repaint() {
         ])
     };
 
-    ws.send(control(&ClientMsg::NewSession { name: None, command })).await.unwrap();
+    ws.send(control(&ClientMsg::NewSession { name: None, command, cwd: None })).await.unwrap();
     let id = match next_control(&mut ws).await {
         ServerMsg::SessionEvent { session, .. } => session.id,
         other => panic!("unexpected: {other:?}"),

@@ -25,17 +25,20 @@ scope:         everything on the wire between a client and octoterm-server
 | frame codec (TS) | `clients/web/src/protocol.ts` |
 | message types | `crates/protocol/src/messages.rs` |
 | cross-language fixtures | `crates/protocol/fixtures/{client,server}-msgs.json` |
-| handshake | `crates/server/src/app.rs` |
+| handshake, JSON side-channel | `crates/server/src/app.rs` |
 | control dispatch, output pumps | `crates/server/src/conn.rs` |
+| launcher providers (discovery) | `crates/server/src/launcher/` |
+| launcher client | `clients/web/src/launchers.ts`, `clients/web/src/new-session.ts` |
 | pty, ring buffer, grid | `crates/server/src/session/{pty,buffer,grid}.rs` |
 | geometry merge and policy | `crates/server/src/session/pty.rs`, `crates/server/src/config.rs` |
 | client resume logic | `crates/client-core/src/lib.rs`, `clients/web/src/client.ts` |
 | protocol integration tests | `crates/server/tests/ws_{auth,control,attach,geometry}.rs` |
+| side-channel integration tests | `crates/server/tests/http_launchers.rs` |
 
 ## 2. Transport [T]
 
-- **T1** One HTTP listener serves both planes: `GET /ws` (WebSocket upgrade) and
-  a static-asset fallback for every other path.
+- **T1** One HTTP listener serves everything: `GET /ws` (WebSocket upgrade), the
+  JSON side-channel of §2.1, and a static-asset fallback for every other path.
 - **T2** A client MUST use exactly one WebSocket connection for all of its
   sessions. Concurrency is expressed by channels (§4), never by extra sockets.
 - **T3** Scheme follows page origin (`ws:` / `wss:`). TLS is not terminated in
@@ -54,6 +57,69 @@ scope:         everything on the wire between a client and octoterm-server
   Pong included — for 90 s. Clients MUST answer Pings (browsers do so
   automatically) and are not required to run their own liveness timer. No
   application-level heartbeat message exists or may be added without §12.
+
+### 2.1 JSON side-channel [T]
+
+- **T8** A small number of routes under `/api/` serve plain JSON over HTTP,
+  outside the framing of §3 and outside the connection state machine of §5.
+  They exist for data that is **session-independent, low-frequency, and needed
+  before (or without) a socket**. Nothing that concerns a session, a channel, or
+  a byte stream may live here — that is §6 and §7 territory.
+- **T9** Every `/api/` route requires `Authorization: Bearer <token>` with the
+  same token as `hello` (H3). Missing or wrong → `401`, empty body, no detail.
+  The header, not a query parameter: query strings leak into logs and history,
+  and requiring a header means the request must come from script, which keeps
+  cross-site `<form>`/`<img>` requests out.
+- **T10** These routes are **stateless and idempotent**: `GET` only, safe to
+  repeat, no effect on any session. A client MAY call one at any time,
+  including before the WebSocket handshake.
+- **T11** Failure is reported by HTTP status, not by a `ServerMsg`. `error`
+  (§9) belongs to the socket and never appears here.
+- **T12** A client MUST tolerate any `/api/` route being absent (`404`) or
+  failing: an older server has no such route. Degrade, do not block. Because of
+  this rule, adding a route is compatible in both directions and does **not**
+  bump `proto` (X4-equivalent; the routes are not versioned by `proto` at all).
+- **T13** Current routes:
+
+| route | reply | notes |
+| --- | --- | --- |
+| `GET /api/launchers` | `{ "launchers": [Launcher] }` | see §2.2 |
+
+### 2.2 `GET /api/launchers` [T]
+
+- **T14** Returns the candidate commands a client may offer under "new
+  session". Entries are discovered server-side by *providers*: the built-in
+  default shell, the operator's own `[[launcher]]` entries in `config.toml`, and
+  **read-only** scans of other terminals' configuration already present on the
+  host (iTerm2, Windows Terminal). octoterm never writes those files.
+- **T15** `Launcher` shape:
+
+```
+Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
+```
+
+  - `id` — `"<provider>:<provider-local id>"`, stable across server restarts so
+    a client may remember a previous choice. Unique within one reply.
+  - `name` — display name, from the source profile. **Not unique**, never a key.
+  - `detail` — one-line human-readable command preview. Presentation only; a
+    client MUST NOT parse it.
+  - `command` — argv, non-empty, directly spawnable.
+  - `cwd` — working directory, or `null`.
+- **T16** The list is ordered for display and MUST be presented in the order
+  given: the built-in default shell first (it is the only entry guaranteed to
+  exist and to work), then operator-defined entries, then scanned ones.
+- **T17** Discovery runs on every request; there is no cache and no
+  invalidation event. A profile added in iTerm2 shows up on the next request.
+- **T18** A failing provider is skipped, not fatal: a corrupt third-party
+  config removes that provider's entries and nothing else. The reply therefore
+  always contains at least the built-in entry, and `200` does **not** mean every
+  provider succeeded. Providers do not report their failures to the client.
+- **T19** A client MUST NOT assume any particular provider exists; `provider`
+  is an opaque string used for grouping and labelling. Unknown values are
+  displayed verbatim.
+- **T20** `command` and `cwd` are passed back **verbatim** in `new-session`
+  (§6.1). The server does not remember which launcher was chosen and does not
+  resolve ids at spawn time; `id` is for the client's own bookkeeping.
 
 ## 3. Frame format [F]
 
@@ -141,7 +207,7 @@ scope:         everything on the wire between a client and octoterm-server
 | --- | --- | --- | --- |
 | `hello` | `token:str`, `proto:u32` | pre-auth only | → `hello-ok`, else `error`+close (H3–H6) |
 | `list-sessions` | — | auth | → `sessions` |
-| `new-session` | `name:str?`, `command:[str]?` | auth | spawns pty; → `session-event{created}` broadcast (C6) |
+| `new-session` | `name:str?`, `command:[str]?`, `cwd:str?` | auth | spawns pty; → `session-event{created}` broadcast (C6) |
 | `kill-session` | `id:u64` | auth | kills child; → `session-event{closed}` when reaped |
 | `rename-session` | `id:u64`, `name:str` | auth | → `session-event{renamed}` broadcast |
 | `preview` | `id:u64` | auth | → `preview-data{id}` |
@@ -149,9 +215,18 @@ scope:         everything on the wire between a client and octoterm-server
 | `detach` | `channel:u32` | attached | stops the pump, drops the desired size (G8); session keeps running (CH6) |
 | `resize` | `channel:u32`, `cols:u16`, `rows:u16` | attached | updates this attachment's desired size (G2) |
 
-`name: null` → server-generated default. `command: null` → default shell
-(`$SHELL` or `/bin/sh` on unix, `powershell.exe` on Windows), spawned in `$HOME`
-with `TERM=xterm-256color`, `COLORTERM=truecolor`.
+`name: null` → server-generated default (U5). `command: null` → the built-in
+default shell, which is by construction the first entry of `GET /api/launchers`
+(`$SHELL` or `/bin/sh` on unix, `powershell.exe` or `%ComSpec%` on Windows).
+`cwd: null`, or a path that is not an existing directory, → the server's default
+working directory (`$HOME` and friends); a bad `cwd` is a warning in the log, not
+a spawn failure — a profile may have been written on another machine. Sessions
+always get `TERM=xterm-256color`, `COLORTERM=truecolor`.
+
+`command` and `cwd` come straight from the client. This grants no privilege the
+client did not already have: `command` has always been arbitrary, and everything
+runs as the user who started the daemon. The bearer token is the only boundary
+(U6).
 
 ### 6.2 Server → client
 
@@ -325,6 +400,7 @@ Current corpus (reference only, see E4):
 | default session geometry | 80×24 until first attach | `manager.rs` |
 | geometry floor | 20×5 | `pty.rs MIN_COLS/MIN_ROWS` |
 | default geometry merge policy | `smallest` | `config.rs WindowSize` |
+| launcher entries per provider | 100 | `launcher/mod.rs PER_PROVIDER_CAP` |
 | reference reconnect backoff | 250 ms doubling, cap 10 s | `client-core`, `client.ts` |
 
 ## 11. Compatibility and versioning [X]
@@ -361,6 +437,7 @@ Before proposing anything new, rule out every applicable row:
 | the current screen of a session, without attaching | `preview` → `preview-data` |
 | the current screen of an attached channel | trigger a resync (S5) |
 | session inventory | `list-sessions` → `sessions` |
+| a static, session-independent catalogue, wanted before the socket is up | a `GET /api/` route (T8) |
 | server-initiated notice about a session's existence or identity | a new `SessionEventKind` on `session-event` |
 | per-attachment lifecycle | `attach` / `detach` |
 | ask for a different geometry | `resize` — a request, not a command (G2) |
@@ -417,6 +494,9 @@ Every item MUST be answered in the proposal.
 - **U8** Which geometry merge policy a deployment runs, and whether it offers
   more than the three in G3 — server configuration, never negotiated on the
   wire. Clients only ever state a wish and obey `resized`.
+- **U9** Which launcher providers a deployment runs, and what a client does with
+  the list (menu, palette, remembering the last choice, ignoring it entirely).
+  The server states what is available; the client owns the UI (R13).
 
 ## 14. Known deviations from the design doc
 

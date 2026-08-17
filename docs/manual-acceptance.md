@@ -5,7 +5,23 @@
 
 ## 桌面浏览器
 - [ ] 列表页显示会话卡片,预览可见
-- [ ] New Session → 卡片实时出现;Rename/Kill 生效且另一浏览器标签页同步更新
+- [ ] 点 + → 弹出启动项菜单;选一条 → 卡片实时出现,名字就是启动项的名字;
+      Rename/Kill 生效且另一浏览器标签页同步更新
+
+## 新建会话菜单(点侧边栏的 +)
+菜单内容来自服务端扫描(内置默认 shell + config.toml 的 `[[launcher]]` +
+iTerm2 / Windows Terminal 的 profile),见 protocol.md §2.2。
+- [ ] **取消不建会话**:分别用 Esc、点菜单外面、再点一次 + → 菜单关闭,
+      会话列表**不增加**(这是原来 `prompt()` 点「否」照样建会话的那个 bug)
+- [ ] 第一条永远是内置默认 shell,分组标题按来源分(内置 / iTerm2 / …)
+- [ ] 键盘可用:↑↓ 移动、回车建会话、Esc 取消;筛选框输入能过滤
+- [ ] 选一条带工作目录的 profile → 新会话的 `pwd` 就是那个目录
+- [ ] 选一条工作目录**在本机不存在**的 profile(比如 iTerm2 里写了 Windows 路径)
+      → 仍能建会话,落在 `$HOME`,服务端日志有一条 WARN
+- [ ] 在 iTerm2 里新加一个带自定义命令的 profile,**不重启 octoterm** → 重开菜单就能看到
+- [ ] 在 config.toml 里加 `[[launcher]]`(重启服务端)→ 出现在「自定义」分组
+- [ ] 停掉服务端再点 + → 菜单里仍有一条「默认 shell」兜底,不是空菜单
+- [ ] `curl http://127.0.0.1:7683/api/launchers` 不带 token → 401
 - [ ] Attach → shell 可交互;`ls --color`、`vim`、`htop` 渲染正常
 - [ ] 拉伸窗口 → 终端随 fit 重排,`tput cols` 值同步变化
 - [ ] `cat` 一个数 MB 文件 → 页面不卡死,结束后画面正确(resync 生效)

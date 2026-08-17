@@ -29,7 +29,17 @@ pub enum SessionEventKind {
 pub enum ClientMsg {
     Hello { token: String, proto: u32 },
     ListSessions,
-    NewSession { name: Option<String>, command: Option<Vec<String>> },
+    /// `cwd` 是启动目录。之所以要它:客户端菜单里的启动项来自系统上已有终端的
+    /// profile(见服务端 `launcher` 模块),而那些 profile 的"工作目录"和"命令"
+    /// 是一体的 —— 只传 command 会把 Windows Terminal 的 `startingDirectory`、
+    /// iTerm2 的 `Custom Directory` 悄悄丢掉,变成"读了配置但行为对不上"。
+    /// 缺省 / 目录不存在时回落到服务端的默认启动目录。
+    NewSession {
+        name: Option<String>,
+        command: Option<Vec<String>>,
+        #[serde(default)]
+        cwd: Option<String>,
+    },
     KillSession { id: u64 },
     RenameSession { id: u64, name: String },
     Preview { id: u64 },

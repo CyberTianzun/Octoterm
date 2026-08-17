@@ -11,7 +11,7 @@ async fn fast_exiting_command_is_removed() {
     let cmd = Some(vec!["/bin/sh".into(), "-c".into(), "exit 0".into()]);
     #[cfg(windows)]
     let cmd = Some(vec!["cmd.exe".into(), "/C".into(), "exit 0".into()]);
-    let _s = m.create(None, cmd).unwrap();
+    let _s = m.create(None, cmd, None).unwrap();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
         assert!(tokio::time::Instant::now() < deadline, "session was never removed");
@@ -28,7 +28,7 @@ async fn create_list_rename_kill() {
     let m = SessionManager::new(1 << 20, WindowSize::default());
     let mut events = m.events();
 
-    let s = m.create(Some("work".into()), None).unwrap();
+    let s = m.create(Some("work".into()), None, None).unwrap();
     assert_eq!(m.list().len(), 1);
     assert_eq!(m.list()[0].name, "work");
     match events.recv().await.unwrap() {
@@ -65,7 +65,7 @@ async fn create_list_rename_kill() {
 #[tokio::test]
 async fn default_name_uses_id() {
     let m = SessionManager::new(1 << 20, WindowSize::default());
-    let s = m.create(None, None).unwrap();
+    let s = m.create(None, None, None).unwrap();
     assert_eq!(m.list()[0].name, format!("octoterm-{}", s.id));
     m.kill(s.id);
 }

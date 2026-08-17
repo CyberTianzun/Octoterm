@@ -25,6 +25,20 @@ pub enum WindowSize {
     Latest,
 }
 
+/// 用户在 config.toml 里写的一条自定义启动项(`[[launcher]]`)。
+///
+/// `command` 直接就是 argv,不是命令行字符串 —— 省掉了"该按哪套规则切分"这个
+/// 问题(见 launcher/cmdline.rs 里两套互不兼容的规则)。
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LauncherSpec {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub command: Vec<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default = "default_listen")]
@@ -33,11 +47,19 @@ pub struct Config {
     pub token: Option<String>,
     #[serde(default)]
     pub window_size: WindowSize,
+    /// TOML 里是 `[[launcher]]`(单数),读出来是一组。
+    #[serde(default, rename = "launcher")]
+    pub launchers: Vec<LauncherSpec>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { listen: default_listen(), token: None, window_size: WindowSize::default() }
+        Self {
+            listen: default_listen(),
+            token: None,
+            window_size: WindowSize::default(),
+            launchers: Vec::new(),
+        }
     }
 }
 
@@ -132,6 +154,33 @@ mod tests {
         assert_eq!(Config::default().window_size, WindowSize::Smallest);
         let cfg: Config = toml::from_str("window_size = \"latest\"").unwrap();
         assert_eq!(cfg.window_size, WindowSize::Latest);
+    }
+
+    #[test]
+    fn launchers_parse_from_double_bracket_tables() {
+        let cfg: Config = toml::from_str(
+            r#"
+            [[launcher]]
+            name = "prod ssh"
+            command = ["ssh", "prod01"]
+            cwd = "~/work"
+
+            [[launcher]]
+            name = "python"
+            command = ["python3", "-i"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.launchers.len(), 2);
+        assert_eq!(cfg.launchers[0].command, ["ssh", "prod01"]);
+        assert_eq!(cfg.launchers[0].cwd.as_deref(), Some("~/work"));
+        assert_eq!(cfg.launchers[1].cwd, None);
+    }
+
+    #[test]
+    fn missing_launcher_section_yields_an_empty_list() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert!(cfg.launchers.is_empty());
     }
 
     #[test]

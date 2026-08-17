@@ -3,12 +3,14 @@ use std::time::Duration;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
-use axum::response::Response;
-use axum::routing::any;
-use axum::Router;
+use axum::http::{header, HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{any, get};
+use axum::{Json, Router};
 use futures_util::SinkExt;
 use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
 
+use crate::launcher::LauncherProvider;
 use crate::session::manager::SessionManager;
 use tokio::time::timeout;
 
@@ -16,13 +18,48 @@ use tokio::time::timeout;
 pub struct AppState {
     pub manager: Arc<SessionManager>,
     pub token: String,
+    /// 新建会话菜单的来源。进程启动时装配一次,每次请求重新扫描(见 launcher 模块)。
+    pub launchers: Arc<Vec<Box<dyn LauncherProvider>>>,
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/ws", any(ws_handler))
+        .route("/api/launchers", get(launchers_handler))
         .fallback(crate::assets::static_handler)
         .with_state(state)
+}
+
+/// `GET /api/launchers` —— 新建会话时可选的启动项。
+///
+/// 走 HTTP 而不是控制消息:这是一份**与会话无关的静态清单**,客户端在页面加载时
+/// 就要用(那时 WebSocket 可能还没握手完),而且它天然适合被当成一次性请求 ——
+/// 塞进控制通道只会给协议增加一对无状态的请求/响应,并且要为它发明一个关联键
+/// (协议里没有 request id,见 docs/protocol.md C5)。
+async fn launchers_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        // 和 WebSocket 握手同一个 token。用 Authorization 头而不是查询参数:
+        // 查询参数会进日志/历史记录,而且带头部的请求必须由 JS 发出,顺手挡掉了
+        // 从别的页面用 <form>/<img> 打过来的跨站请求。
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    // 扫描要读若干配置文件,是阻塞 IO,不能占着 async 执行器
+    let providers = state.launchers.clone();
+    match tokio::task::spawn_blocking(move || crate::launcher::discover_all(&providers)).await {
+        Ok(list) => Json(serde_json::json!({ "launchers": list })).into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "launcher 扫描任务失败");
+            (StatusCode::INTERNAL_SERVER_ERROR, "launcher discovery failed").into_response()
+        }
+    }
+}
+
+fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
+    headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .is_some_and(|v| v == token)
 }
 
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow::Result<()> {

@@ -47,7 +47,32 @@ token = "my-fixed-token"
 # 多端同时 attach 同一个会话时,pty 只有一个尺寸,各端的诉求需要归并:
 # "smallest"(默认,谁都不会看到被截断的画面)、"largest"、"latest"(跟随最近一端)
 window_size = "smallest"
+
+# 给「新建会话」菜单加几条自定义项。可选 —— 菜单本来就有默认 shell,
+# 以及从 iTerm2 / Windows Terminal 里扫出来的 profile。
+[[launcher]]
+name = "prod ssh"
+command = ["ssh", "prod01"]   # 直接是 argv,不是命令行字符串:不用猜切分规则
+cwd = "~/work"                # 可选
 ```
+
+### 新建会话菜单
+
+点 **+** 弹出的是一个菜单,不是输入框。菜单内容由服务端的 provider 提供,
+常见情况下什么都不用配:
+
+| provider | 读哪里 |
+| --- | --- |
+| 内置 | `$SHELL`(unix)/ `powershell.exe`、`%ComSpec%`(Windows) |
+| 自定义 | 上面配置文件里的 `[[launcher]]` |
+| iTerm2 | `com.googlecode.iterm2.plist` + `DynamicProfiles/`(macOS) |
+| Windows Terminal | `settings.json`(商店版 / Preview / 便携版都找) |
+
+第三方配置**只读不写**。只收「跑什么、在哪跑」跟默认不同的 profile ——
+只改了配色的那些在这个菜单里是噪音。某个 provider 失败(没装、配置损坏、
+读不了)只是少几条并留一行日志,菜单照常能用。
+
+想接一个新来源,在 `crates/server/src/launcher/` 里实现一个 `LauncherProvider` 即可。
 
 默认只监听 127.0.0.1。要在其他设备访问,用命令行参数覆盖(优先于配置文件):
 
