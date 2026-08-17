@@ -8,14 +8,27 @@
   <link rel="stylesheet" href="./app.css" />
 </head>
 <body>
-  <header id="topbar">
-    <button id="back" hidden>&larr;</button>
-    <h1 id="title">octoterm</h1>
-    <button id="new-session" title="New session">+</button>
-  </header>
-  <div id="reconnect-banner" hidden>reconnecting…</div>
-  <main id="session-list"></main>
-  <main id="terminal-page" hidden><div id="terminal"></div></main>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-head">
+        <span id="logo">octoterm</span>
+        <button id="new-session" title="新建会话">+</button>
+      </div>
+      <nav id="session-nav"></nav>
+      <div id="sidebar-foot">本地会话内核 · <span id="conn-state">已连接</span></div>
+    </aside>
+    <div id="scrim" hidden></div>
+    <main id="workspace">
+      <header id="workbar">
+        <button id="menu" title="会话列表">☰</button>
+        <span id="work-title">会话</span>
+        <button id="detach" hidden>返回列表</button>
+      </header>
+      <div id="reconnect-banner" hidden>reconnecting…</div>
+      <div id="dashboard"></div>
+      <div id="terminal-wrap" hidden><div id="terminal"></div></div>
+    </main>
+  </div>
   <script type="module" src="./app.js"></script>
 </body>
 </html>
