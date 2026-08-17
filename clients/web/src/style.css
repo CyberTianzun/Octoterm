@@ -1,4 +1,6 @@
 * { box-sizing: border-box; margin: 0; }
+/* hidden 属性必须永远赢过任何 display 声明 */
+[hidden] { display: none !important; }
 :root {
   color-scheme: dark;
   --bg: #0f0f16;
