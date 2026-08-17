@@ -1,0 +1,88 @@
+name: release
+on:
+  push:
+    tags: ["release-*"]
+
+# 只需要往 Releases 里写产物,不给多余权限
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          # arm64 交叉编译,不依赖 ARM runner 的可用性
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            linker: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本号取自 tag:release-v0.1.0 -> v0.1.0
+      - name: Resolve version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#release-}" >> "$GITHUB_ENV"
+
+      # web 产物必须先于 cargo build:server 用 rust-embed 把 clients/web/dist/ 编进二进制
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build web client
+        working-directory: clients/web
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross linker
+        if: matrix.apt != ''
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.apt }}
+          echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: cargo build --release -p octoterm-server --target ${{ matrix.target }}
+
+      - name: Package (unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          name="octoterm-${VERSION}-${{ matrix.target }}"
+          tar -czf "${name}.tar.gz" -C "target/${{ matrix.target }}/release" octoterm-server
+          shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+
+      - name: Package (windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $name = "octoterm-$env:VERSION-${{ matrix.target }}"
+          Compress-Archive -Path "target/${{ matrix.target }}/release/octoterm-server.exe" -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+
+      # 各 job 用同一个 tag 调用:第一个创建 release,其余往里追加产物
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ env.VERSION }}
+          files: |
+            octoterm-*.tar.gz
+            octoterm-*.tar.gz.sha256
+            octoterm-*.zip
+            octoterm-*.zip.sha256
