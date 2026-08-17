@@ -1,9 +1,31 @@
 // 由 scripts/gen-themes.mjs 生成,不要手改。源:mbadolato/iTerm2-Color-Schemes (MIT)
 import type { ITheme } from "@xterm/xterm";
 
-export const DEFAULT_THEME_NAME = "JetBrains Islands Dark";
+export const DEFAULT_THEME_NAME = "2026 Dark";
 
 export const BUILTIN_THEMES: Record<string, ITheme> = {
+  "2026 Dark": {
+    "background": "#191a1b",
+    "foreground": "#cccccc",
+    "cursor": "#bfbfbf",
+    "selectionBackground": "#3994bc33",
+    "black": "#000000",
+    "red": "#cd3131",
+    "green": "#0dbc79",
+    "yellow": "#e5e510",
+    "blue": "#2472c8",
+    "magenta": "#bc3fbc",
+    "cyan": "#11a8cd",
+    "white": "#e5e5e5",
+    "brightBlack": "#666666",
+    "brightRed": "#f14c4c",
+    "brightGreen": "#23d18b",
+    "brightYellow": "#f5f543",
+    "brightBlue": "#3b8eea",
+    "brightMagenta": "#d670d6",
+    "brightCyan": "#29b8db",
+    "brightWhite": "#e5e5e5"
+  },
   "JetBrains Islands Dark": {
     "black": "#191a1c",
     "red": "#f75464",
