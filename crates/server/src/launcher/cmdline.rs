@@ -205,6 +205,57 @@ pub fn expand_tilde(s: &str, home: Option<&Path>) -> String {
     }
 }
 
+/// 把 `CommandLineToArgvW` 拆开的、带空格的可执行路径粘回去。
+///
+/// Windows Terminal / Git for Windows 经常写出不带引号的
+/// `C:\Program Files\Git\bin\bash.exe -li`。按 argv 规则这是三个词,但
+/// `CreateProcessW` 在 `lpApplicationName == NULL` 时会从左往右试前缀,
+/// 直到撞上一个存在的文件。portable-pty 把 argv[0] 塞进 `lpApplicationName`,
+/// **不会**做这件事,所以必须我们自己补。
+///
+/// `is_file` 注进来是为了可测:切分规则不该绑死在跑测试的那台机器上。
+/// 找不到匹配的文件时原样返回,让后面的 spawn 报出原始 argv。
+pub fn glue_unquoted_windows_exe(argv: Vec<String>, is_file: &dyn Fn(&str) -> bool) -> Vec<String> {
+    if argv.is_empty() {
+        return argv;
+    }
+    // `wsl.exe -d Ubuntu` 这种短名不要粘,哪怕回调碰巧对某个拼接结果返回 true。
+    if !looks_like_windows_path(&argv[0]) {
+        return argv;
+    }
+    for end in 0..argv.len() {
+        let candidate = argv[..=end].join(" ");
+        if is_file(&candidate) {
+            return glued_argv(candidate, &argv[end + 1..]);
+        }
+        // CreateProcess 对没有扩展名的前缀还会再试一份 `.exe`
+        if !has_file_extension(&candidate) {
+            let with_exe = format!("{candidate}.exe");
+            if is_file(&with_exe) {
+                return glued_argv(with_exe, &argv[end + 1..]);
+            }
+        }
+    }
+    argv
+}
+
+fn glued_argv(exe: String, rest: &[String]) -> Vec<String> {
+    let mut out = Vec::with_capacity(1 + rest.len());
+    out.push(exe);
+    out.extend_from_slice(rest);
+    out
+}
+
+fn looks_like_windows_path(s: &str) -> bool {
+    s.contains('\\') || s.contains('/') || s.chars().nth(1) == Some(':')
+}
+
+/// 最后一段路径里有没有 `.`。不用 `Path::file_name`:在 unix 上测 Windows
+/// 路径时 `\` 不是分隔符,整串会被当成一个文件名。
+fn has_file_extension(s: &str) -> bool {
+    s.rsplit(['\\', '/']).next().is_some_and(|name| name.contains('.'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -272,5 +323,71 @@ mod tests {
         assert_eq!(expand_tilde("/a/~/b", Some(home)), "/a/~/b");
         assert_eq!(expand_tilde("~work", Some(home)), "~work");
         assert_eq!(expand_tilde("~/work", None), "~/work");
+    }
+
+    fn exists_only(want: &'static str) -> impl Fn(&str) -> bool {
+        move |p| p.eq_ignore_ascii_case(want)
+    }
+
+    #[test]
+    fn glue_reassembles_unquoted_program_files_git_bash() {
+        // Git for Windows 写进 WT 的典型 commandline,一个引号都没有
+        let split = split_windows(r"C:\Program Files\Git\bin\bash.exe -li");
+        assert_eq!(split, [r"C:\Program", r"Files\Git\bin\bash.exe", "-li"]);
+        assert_eq!(
+            glue_unquoted_windows_exe(split, &exists_only(r"C:\Program Files\Git\bin\bash.exe")),
+            [r"C:\Program Files\Git\bin\bash.exe", "-li"]
+        );
+    }
+
+    #[test]
+    fn glue_keeps_already_quoted_paths() {
+        let split = split_windows(r#""C:\Program Files\Git\bin\bash.exe" -li"#);
+        assert_eq!(
+            glue_unquoted_windows_exe(split, &exists_only(r"C:\Program Files\Git\bin\bash.exe")),
+            [r"C:\Program Files\Git\bin\bash.exe", "-li"]
+        );
+    }
+
+    #[test]
+    fn glue_leaves_argv_alone_when_no_file_matches() {
+        let split = split_windows(r"C:\Program Files\Git\bin\bash.exe -li");
+        assert_eq!(
+            glue_unquoted_windows_exe(split.clone(), &|_| false),
+            split
+        );
+    }
+
+    #[test]
+    fn glue_does_not_touch_bare_program_names() {
+        // 即便回调对某个拼接结果撒谎,也不该把 `wsl.exe -d Ubuntu` 粘成一条路径
+        let argv = vec!["wsl.exe".into(), "-d".into(), "Ubuntu".into()];
+        assert_eq!(
+            glue_unquoted_windows_exe(argv, &|p| p == "wsl.exe -d"),
+            ["wsl.exe", "-d", "Ubuntu"]
+        );
+    }
+
+    #[test]
+    fn glue_appends_exe_like_createprocess() {
+        let split = split_windows(r"C:\Program Files\Git\bin\bash -li");
+        assert_eq!(
+            glue_unquoted_windows_exe(split, &exists_only(r"C:\Program Files\Git\bin\bash.exe")),
+            [r"C:\Program Files\Git\bin\bash.exe", "-li"]
+        );
+    }
+
+    #[test]
+    fn glue_stops_at_the_first_existing_file() {
+        // `cmd.exe` 本身在,后面的参数不能被吃进路径
+        let argv = vec![
+            r"C:\Windows\System32\cmd.exe".into(),
+            "/c".into(),
+            "echo".into(),
+        ];
+        assert_eq!(
+            glue_unquoted_windows_exe(argv, &exists_only(r"C:\Windows\System32\cmd.exe")),
+            [r"C:\Windows\System32\cmd.exe", "/c", "echo"]
+        );
     }
 }

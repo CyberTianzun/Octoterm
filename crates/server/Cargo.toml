@@ -18,7 +18,7 @@ toml = "0.8"
 # iTerm2 的偏好设置是 plist(通常是二进制格式)。跨平台可用,所以不按 target 门控:
 # 解析逻辑要能在任意平台上跑单测(见 launcher/iterm2.rs)。
 plist = "1"
-uuid = { version = "1", features = ["v4"] }
+uuid = { version = "1", features = ["v4", "v5"] }
 directories = "5"
 clap = { version = "4", features = ["derive"] }
 base64 = "0.22"

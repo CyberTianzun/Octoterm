@@ -160,9 +160,18 @@ impl Session {
         buffer_cap: usize,
         window_size: WindowSize,
     ) -> Result<Arc<Session>> {
-        let argv = launch.command.unwrap_or_else(crate::launcher::builtin::default_command);
+        let mut argv = launch.command.unwrap_or_else(crate::launcher::builtin::default_command);
         if argv.is_empty() || argv[0].is_empty() {
             bail!("empty command");
+        }
+        // portable-pty 把 argv[0] 塞进 CreateProcessW 的 lpApplicationName,
+        // 不会像 Windows Terminal 那样试探带空格的未加引号路径。客户端也可能
+        // 把已经拆坏的 argv 发回来,spawn 这一层再粘一次当最后防线。
+        #[cfg(windows)]
+        {
+            argv = crate::launcher::cmdline::glue_unquoted_windows_exe(argv, &|p| {
+                std::path::Path::new(p).is_file()
+            });
         }
         // 请求的目录不存在就回落到默认,而不是让整个 spawn 失败:profile 里的
         // 目录可能是在另一台机器上写的,为此拒绝开会话是过度反应。
@@ -443,6 +452,30 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.to_string().contains("empty command"), "{err}");
+    }
+
+    /// Git for Windows 写进 WT 的 commandline 不带引号,切分后是
+    /// `["C:\Program", "Files\Git\bin\bash.exe", "-li"]`。spawn 必须把它粘回去,
+    /// 否则 CreateProcessW 去找一个叫 `C:\Program` 的文件。
+    #[cfg(windows)]
+    #[test]
+    fn spawn_glues_unquoted_git_bash_path() {
+        let bash = r"C:\Program Files\Git\bin\bash.exe";
+        if !std::path::Path::new(bash).is_file() {
+            return;
+        }
+        let launch = Launch {
+            command: Some(vec![
+                r"C:\Program".into(),
+                r"Files\Git\bin\bash.exe".into(),
+                "-lc".into(),
+                "exit 0".into(),
+            ]),
+            cwd: None,
+        };
+        let session = Session::spawn(1, "t".into(), 80, 24, launch, 64, WindowSize::default())
+            .expect("unquoted Git Bash path must be glued before CreateProcessW");
+        session.kill();
     }
 
     /// 不存在的 cwd 不该让 spawn 失败 —— profile 里的目录可能来自另一台机器。
