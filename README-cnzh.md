@@ -55,7 +55,9 @@ cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 
 ## 架构
 
-见 `docs/superpowers/specs/2026-08-16-octoterm-design.md`。
+通信协议规范:[`docs/protocol.md`](docs/protocol.md) —— 线上格式的规范性定义,
+以及任何协议改动都要过的评审清单。设计背景与取舍:
+`docs/superpowers/specs/2026-08-16-octoterm-design.md`。
 
 - `crates/protocol` — 帧与消息定义(协议唯一事实来源)
 - `crates/server` — daemon:pty、服务端 grid、WebSocket

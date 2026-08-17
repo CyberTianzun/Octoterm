@@ -65,7 +65,9 @@ When exposing it beyond localhost, bring your own network-layer security
 
 ## Architecture
 
-See `docs/superpowers/specs/2026-08-16-octoterm-design.md`.
+Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative spec, and
+the checklist any protocol change has to pass. Background and rationale:
+`docs/superpowers/specs/2026-08-16-octoterm-design.md`.
 
 - `crates/protocol` — frame and message definitions (single source of truth)
 - `crates/server` — the daemon: pty hosting, server-side grid, WebSocket
