@@ -1,13 +1,25 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+fn default_listen() -> SocketAddr {
+    "127.0.0.1:7683".parse().unwrap()
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
+    #[serde(default = "default_listen")]
     pub listen: SocketAddr,
-    pub token: String,
+    #[serde(default)]
+    pub token: Option<String>,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self { listen: default_listen(), token: None }
+    }
 }
 
 fn default_path() -> Result<PathBuf> {
@@ -17,30 +29,33 @@ fn default_path() -> Result<PathBuf> {
 }
 
 impl Config {
-    pub fn load_or_init(path: Option<PathBuf>) -> Result<Config> {
+    /// 只读加载,永不写文件:显式路径必须存在;缺省路径存在则读,不存在用默认值。
+    pub fn load(path: Option<PathBuf>) -> Result<Config> {
         let path = match path {
-            Some(p) => p,
-            None => default_path()?,
+            Some(p) => {
+                if !p.exists() {
+                    bail!("config file not found: {}", p.display());
+                }
+                p
+            }
+            None => {
+                let p = default_path()?;
+                if !p.exists() {
+                    return Ok(Config::default());
+                }
+                p
+            }
         };
-        if path.exists() {
-            let raw = std::fs::read_to_string(&path)?;
-            return Ok(toml::from_str(&raw)?);
-        }
-        let config = Config {
-            listen: "127.0.0.1:7683".parse().unwrap(),
-            token: uuid::Uuid::new_v4().simple().to_string(),
-        };
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(&path, toml::to_string_pretty(&config)?)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-        }
-        eprintln!("octoterm: generated config at {} (token: {})", path.display(), config.token);
-        Ok(config)
+        Ok(toml::from_str(&std::fs::read_to_string(&path)?)?)
+    }
+}
+
+/// token 优先级:--token > 配置文件 > 每次启动新生成(Jupyter 式)。
+/// 返回 (token, 是否本次生成)。
+pub fn resolve_token(cli: Option<String>, config: Option<String>) -> (String, bool) {
+    match cli.or(config) {
+        Some(t) => (t, false),
+        None => (uuid::Uuid::new_v4().simple().to_string(), true),
     }
 }
 
@@ -91,5 +106,18 @@ mod tests {
             effective_listen(base(), Some("::1".parse().unwrap()), Some(9000)).to_string(),
             "[::1]:9000"
         );
+    }
+
+    #[test]
+    fn token_priority_cli_then_config_then_generated() {
+        assert_eq!(
+            resolve_token(Some("cli".into()), Some("cfg".into())),
+            ("cli".into(), false)
+        );
+        assert_eq!(resolve_token(None, Some("cfg".into())), ("cfg".into(), false));
+        let (t1, generated) = resolve_token(None, None);
+        assert!(generated && !t1.is_empty());
+        let (t2, _) = resolve_token(None, None);
+        assert_ne!(t1, t2, "每次生成的 token 必须不同");
     }
 }

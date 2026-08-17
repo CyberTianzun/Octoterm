@@ -38,14 +38,27 @@ async fn bad_token_is_rejected_and_closed() {
 }
 
 #[tokio::test]
-async fn config_generates_and_persists_token() {
+async fn explicit_config_path_must_exist() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("nope.toml");
+    assert!(octoterm_server::config::Config::load(Some(path.clone())).is_err());
+    assert!(!path.exists(), "load 不得创建文件");
+}
+
+#[tokio::test]
+async fn config_load_reads_existing_and_fills_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
-    let c1 = octoterm_server::config::Config::load_or_init(Some(path.clone())).unwrap();
-    assert_eq!(c1.listen.to_string(), "127.0.0.1:7683");
-    assert!(!c1.token.is_empty());
-    let c2 = octoterm_server::config::Config::load_or_init(Some(path)).unwrap();
-    assert_eq!(c1.token, c2.token);
+    std::fs::write(&path, "listen = \"0.0.0.0:1234\"\ntoken = \"fixed\"\n").unwrap();
+    let c = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
+    assert_eq!(c.listen.to_string(), "0.0.0.0:1234");
+    assert_eq!(c.token.as_deref(), Some("fixed"));
+
+    // 部分字段配置:缺省字段自动补全
+    std::fs::write(&path, "token = \"only\"\n").unwrap();
+    let c = octoterm_server::config::Config::load(Some(path)).unwrap();
+    assert_eq!(c.listen.to_string(), "127.0.0.1:7683");
+    assert_eq!(c.token.as_deref(), Some("only"));
 }
 
 #[tokio::test]
@@ -55,17 +68,6 @@ async fn non_binary_first_frame_gets_error_reply() {
     ws.send(Message::Text("hi".into())).await.unwrap();
     let (_, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
     assert!(matches!(msg.unwrap(), ServerMsg::Error { .. }));
-}
-
-#[cfg(unix)]
-#[tokio::test]
-async fn generated_config_is_owner_only() {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    octoterm_server::config::Config::load_or_init(Some(path.clone())).unwrap();
-    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600);
 }
 
 #[tokio::test]

@@ -120,7 +120,7 @@ Rust GUI 客户端本体是后续独立项目,不在 v1,但协议与 client-core
 
 ## 安全
 
-- bearer token:配置文件指定或首次启动生成打印;WebSocket 连接经 `hello` 带内握手校验,失败即断开(静态资源不含秘密,公开);
+- bearer token:优先级 `--token` > 配置文件 > 每次启动随机生成(Jupyter 式,启动日志打印完整访问 URL);配置文件永不自动生成,只读加载;WebSocket 连接经 `hello` 带内握手校验,失败即断开(静态资源不含秘密,公开);
 - 默认只监听 `127.0.0.1`,对外监听需显式配置;文档引导 Tailscale / 反向代理加 TLS;
 - TLS 终结不进 daemon。
 

@@ -15,16 +15,34 @@ struct Args {
     /// 覆盖监听端口
     #[arg(long)]
     port: Option<u16>,
+    /// 固定鉴权 token(缺省每次启动随机生成并打印)
+    #[arg(long)]
+    token: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
-    let config = Config::load_or_init(args.config)?;
+    let config = Config::load(args.config)?;
     let listen = octoterm_server::config::effective_listen(config.listen, args.host, args.port);
+    let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
     let manager = SessionManager::new(1 << 20);
     let listener = tokio::net::TcpListener::bind(listen).await?;
+
+    // Jupyter 式:每次启动打印可直接点开的访问 URL(0.0.0.0/:: 显示为 127.0.0.1)
+    let ip = listen.ip();
+    let host_part = if ip.is_unspecified() {
+        "127.0.0.1".to_string()
+    } else if ip.is_ipv6() {
+        format!("[{ip}]")
+    } else {
+        ip.to_string()
+    };
     eprintln!("octoterm-server listening on {listen}");
-    serve(listener, AppState { manager, token: config.token }).await
+    eprintln!("    http://{host_part}:{}/#token={token}", listen.port());
+    if generated {
+        eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
+    }
+    serve(listener, AppState { manager, token }).await
 }

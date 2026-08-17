@@ -9,12 +9,21 @@
 ```sh
 cd clients/web && npm install && npm run build && cd ../..
 cargo run -p octoterm-server
-# 记下打印的 token,浏览器打开:
-# http://127.0.0.1:7683/#token=<token>
+# 启动日志会打印完整访问 URL(Jupyter 式,token 每次启动随机生成),直接点开即可:
+#     http://127.0.0.1:7683/#token=<本次随机 token>
 ```
 
-默认只监听 127.0.0.1。要在其他设备访问,编辑配置文件(路径见启动日志)里的
-`listen`,或用命令行参数临时覆盖(优先于配置文件):
+要固定 token(重启后旧页面免重新登录),用 `--token <值>`,或在配置文件里写
+`token = "<值>"`。配置文件不会自动生成;需要时自行创建
+`~/Library/Application Support/octoterm/config.toml`(Linux 为
+`~/.config/octoterm/config.toml`),或用 `--config <路径>` 指定,字段均可省略:
+
+```toml
+listen = "127.0.0.1:7683"
+token = "my-fixed-token"
+```
+
+默认只监听 127.0.0.1。要在其他设备访问,用命令行参数覆盖(优先于配置文件):
 
 ```sh
 cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
