@@ -269,7 +269,7 @@ fn profiles_list(root: &Value) -> (Option<Value>, Vec<Value>) {
 }
 
 fn ingest_fragments(files: &[FragmentFile]) -> Generated {
-    let mut gen = Generated::default();
+    let mut generated = Generated::default();
     for f in files {
         let Ok(root) = serde_json::from_str::<Value>(&jsonc::strip(&f.contents)) else {
             continue;
@@ -285,7 +285,7 @@ fn ingest_fragments(files: &[FragmentFile]) -> Generated {
                     continue;
                 }
                 // updates 只改目标 profile 的字段,不带走自己的 source
-                gen.updates
+                generated.updates
                     .entry(key)
                     .or_default()
                     .push(Overlay::from_json(p, None));
@@ -300,13 +300,13 @@ fn ingest_fragments(files: &[FragmentFile]) -> Generated {
                 },
             };
             let overlay = Overlay::from_json(p, Some(f.source.clone()));
-            if !gen.by_guid.contains_key(&key) {
-                gen.order.push(key.clone());
+            if !generated.by_guid.contains_key(&key) {
+                generated.order.push(key.clone());
             }
-            gen.by_guid.entry(key).or_default().apply(&overlay);
+            generated.by_guid.entry(key).or_default().apply(&overlay);
         }
     }
-    gen
+    generated
 }
 
 fn disabled_sources(root: &Value) -> HashSet<String> {
@@ -321,16 +321,16 @@ fn disabled_sources(root: &Value) -> HashSet<String> {
         .collect()
 }
 
-fn lookup<'a>(gen: &'a Generated, key: &str) -> (Option<&'a Overlay>, &'a [Overlay]) {
-    let base = gen.by_guid.get(key);
-    let updates = gen.updates.get(key).map(Vec::as_slice).unwrap_or(&[]);
+fn lookup<'a>(generated: &'a Generated, key: &str) -> (Option<&'a Overlay>, &'a [Overlay]) {
+    let base = generated.by_guid.get(key);
+    let updates = generated.updates.get(key).map(Vec::as_slice).unwrap_or(&[]);
     (base, updates)
 }
 
-fn merge_layers(defaults: &Overlay, gen: &Generated, key: Option<&str>, top: Overlay) -> Overlay {
+fn merge_layers(defaults: &Overlay, generated: &Generated, key: Option<&str>, top: Overlay) -> Overlay {
     let mut merged = defaults.clone();
     if let Some(k) = key {
-        let (base, updates) = lookup(gen, k);
+        let (base, updates) = lookup(generated, k);
         if let Some(base) = base {
             merged.apply(base);
         }
@@ -417,7 +417,7 @@ pub fn parse(
         .map(|d| Overlay::from_json(d, None))
         .unwrap_or_default();
     let disabled = disabled_sources(&root);
-    let gen = ingest_fragments(fragments);
+    let generated = ingest_fragments(fragments);
 
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -435,7 +435,7 @@ pub fn parse(
         if let Some(ref k) = key {
             seen.insert(k.clone());
         }
-        let merged = merge_layers(&default_overlay, &gen, key.as_deref(), user);
+        let merged = merge_layers(&default_overlay, &generated, key.as_deref(), user);
         let Some(local_id) = str_field(p, "guid").or(merged.name.as_deref()) else {
             continue;
         };
@@ -445,12 +445,12 @@ pub fn parse(
     }
 
     // settings 还没写桩的新 fragment,按加载顺序接在后面
-    for k in &gen.order {
+    for k in &generated.order {
         if !seen.insert(k.clone()) {
             continue;
         }
         let user = Overlay::default();
-        let merged = merge_layers(&default_overlay, &gen, Some(k), user);
+        let merged = merge_layers(&default_overlay, &generated, Some(k), user);
         if let Some(l) = emit(k, &merged, &disabled, env, is_file) {
             out.push(l);
         }

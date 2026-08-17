@@ -160,6 +160,8 @@ impl Session {
         buffer_cap: usize,
         window_size: WindowSize,
     ) -> Result<Arc<Session>> {
+        // 只有 Windows 分支会改写 argv
+        #[allow(unused_mut)]
         let mut argv = launch.command.unwrap_or_else(crate::launcher::builtin::default_command);
         if argv.is_empty() || argv[0].is_empty() {
             bail!("empty command");
