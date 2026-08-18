@@ -25,7 +25,7 @@ export interface SettingsHost {
   set(cfg: OctoConfig): void;
 }
 
-type Tab = "theme" | "font" | "terminal" | "io";
+type Tab = "theme" | "font" | "terminal" | "ui" | "io";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -136,6 +136,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     ["theme", "settings.tab.theme"],
     ["font", "settings.tab.font"],
     ["terminal", "settings.tab.terminal"],
+    ["ui", "settings.tab.ui"],
     ["io", "settings.tab.io"],
   ];
 
@@ -326,6 +327,30 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       })),
     );
 
+    wrap.append(
+      row(t("settings.term.cursorStyle"), cs),
+      row(t("settings.term.cursorInactive"), cis),
+      row(t("settings.term.cursorBlink"), blink),
+      row(t("settings.term.scrollback"), sb, t("unit.lines")),
+      row(t("settings.term.customGlyphs"), glyphs, t("settings.term.customGlyphsHint")),
+      row(t("settings.term.contrast"), contrast, t("settings.term.contrastHint")),
+      row(t("settings.term.boldBright"), boldBright),
+    );
+    return wrap;
+  }
+
+  /* ---------- 界面 ---------- */
+
+  /**
+   * 语言排在第一行,而且整个 tab 就叫「界面」。
+   *
+   * 之前这几项挂在「终端」tab 的一个分隔线下面 —— 找不到。这三个开关本来也
+   * 不是终端行为(它们管的是侧边栏、渲染器、配色外溢),搬出来两件事一起修。
+   */
+  function renderUi(): HTMLElement {
+    const cfg = host.get();
+    const wrap = el("div", "set-pane");
+
     const langs: readonly LocalePref[] = ["auto", ...LOCALES];
     const lang = select(langs, cfg.ui.locale, (l) =>
       l === "auto" ? t("settings.ui.languageAuto") : LOCALE_NAMES[l],
@@ -348,15 +373,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     );
 
     wrap.append(
-      row(t("settings.term.cursorStyle"), cs),
-      row(t("settings.term.cursorInactive"), cis),
-      row(t("settings.term.cursorBlink"), blink),
-      row(t("settings.term.scrollback"), sb, t("unit.lines")),
-      row(t("settings.term.customGlyphs"), glyphs, t("settings.term.customGlyphsHint")),
-      row(t("settings.term.contrast"), contrast, t("settings.term.contrastHint")),
-      row(t("settings.term.boldBright"), boldBright),
-      el("div", "set-sep", t("settings.ui.section")),
-      row(t("settings.ui.language"), lang),
+      row(t("settings.ui.language"), lang, t("settings.ui.languageHint")),
       row(t("settings.ui.followTheme"), follow),
       row(t("settings.ui.sidebarPreview"), prev),
       row(t("settings.ui.webgl"), webgl, t("settings.ui.webglHint")),
@@ -454,6 +471,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       tab === "theme" ? renderTheme()
       : tab === "font" ? renderFont()
       : tab === "terminal" ? renderTerminal()
+      : tab === "ui" ? renderUi()
       : renderIo();
     body.replaceChildren(pane);
   }

@@ -68,6 +68,7 @@ const zh = {
   "settings.tab.theme": "主题",
   "settings.tab.font": "字体",
   "settings.tab.terminal": "终端",
+  "settings.tab.ui": "界面",
   "settings.tab.io": "导入 / 导出",
 
   "settings.theme.search": "搜索 {n} 个主题…",
@@ -97,9 +98,9 @@ const zh = {
   "settings.term.contrastHint": "1 = 不干预;提高可读性但会改写主题色",
   "settings.term.boldBright": "加粗用亮色",
 
-  "settings.ui.section": "界面",
   "settings.ui.language": "语言",
   "settings.ui.languageAuto": "跟随浏览器",
+  "settings.ui.languageHint": "立即生效,不需要刷新页面",
   "settings.ui.followTheme": "界面跟随主题配色",
   "settings.ui.sidebarPreview": "侧边栏会话预览",
   "settings.ui.webgl": "WebGL 渲染器",
@@ -180,6 +181,7 @@ const en: Record<MsgKey, string> = {
   "settings.tab.theme": "Theme",
   "settings.tab.font": "Font",
   "settings.tab.terminal": "Terminal",
+  "settings.tab.ui": "Interface",
   "settings.tab.io": "Import / Export",
 
   "settings.theme.search": "Search {n} themes…",
@@ -209,9 +211,9 @@ const en: Record<MsgKey, string> = {
   "settings.term.contrastHint": "1 = leave alone; higher improves readability but rewrites theme colors",
   "settings.term.boldBright": "Bold text in bright colors",
 
-  "settings.ui.section": "Interface",
   "settings.ui.language": "Language",
   "settings.ui.languageAuto": "Follow browser",
+  "settings.ui.languageHint": "Applies immediately, no reload needed",
   "settings.ui.followTheme": "Interface follows theme colors",
   "settings.ui.sidebarPreview": "Session previews in the sidebar",
   "settings.ui.webgl": "WebGL renderer",

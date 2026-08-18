@@ -65,6 +65,25 @@ test("index.html 引用的词条键都存在", async () => {
   }
 });
 
+// 词条只会加不会删,时间长了就攒下一堆没人引用的死条目 —— 翻译的时候还得
+// 陪着翻一遍。这条在「界面」独立成 tab、分隔线标题作废时正好抓到过一次。
+test("没有没人引用的死词条", async () => {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const srcDir = join(here, "../src");
+  const files = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else if (/\.(ts|html)$/.test(e.name) && e.name !== "i18n.ts") files.push(full);
+    }
+  };
+  walk(srcDir);
+  const haystack = files.map((f) => readFileSync(f, "utf-8")).join("\n");
+  const unused = Object.keys(catalog("zh-CN")).filter((k) => !haystack.includes(k));
+  assert.deepEqual(unused, [], "这些词条没人引用");
+});
+
 /* ---------- 语言解析 ---------- */
 
 test("显式偏好压过浏览器语言", () => {
