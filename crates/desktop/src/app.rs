@@ -7,8 +7,8 @@ use octoterm_server::session::manager::SessionManager;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::RecvError;
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
+use winit::event::{StartCause, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
 use winit::window::WindowId;
 
 use crate::supervisor::Supervisor;
@@ -187,13 +187,43 @@ impl ApplicationHandler<UserEvent> for App {
                 self.settings_window = None;
             }
             WindowEvent::RedrawRequested => {
+                // 这个闭包同一帧里可能被调用多次(Grid 之类的容器会让 egui 重跑一
+                // 趟),所以只能描述界面,不能在里面放一次性的副作用。
                 w.redraw_ui(|ui| {
                     egui::CentralPanel::default().show(ui, |ui| {
                         ui.label("设置界面将在下一步实现");
                     });
                 });
+                // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
+                // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。
+                if w.close_requested() {
+                    self.settings_window = None;
+                }
             }
             _ => w.request_redraw(),
         }
+    }
+
+    /// `WaitUntil` 到点只是把事件循环叫醒,它自己不产生重绘请求——光标闪烁、
+    /// tooltip 延迟显示这类靠非零 `repaint_delay` 排期的东西,得在这里补一脚。
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. })
+            && let Some(w) = &self.settings_window
+        {
+            w.request_redraw();
+        }
+    }
+
+    /// 每轮事件处理完、真正去睡之前决定「睡多久」。
+    ///
+    /// 没有窗口时是 `Wait`(无限期阻塞,直到有事件)——托盘常驻应用空闲时必须真的
+    /// 空闲,不能靠 `Poll` 忙转。有窗口且 egui 排了定时重绘时才 `WaitUntil`,到点
+    /// 由上面的 `new_events` 把重绘请求发出去。
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let flow = match self.settings_window.as_ref().and_then(|w| w.repaint_at()) {
+            Some(at) => ControlFlow::WaitUntil(at),
+            None => ControlFlow::Wait,
+        };
+        event_loop.set_control_flow(flow);
     }
 }
