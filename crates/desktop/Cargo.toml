@@ -15,10 +15,12 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 directories = "5"
+fs4 = { version = "1", features = ["sync"] }
 octoterm-server = { path = "../server" }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 toml_edit = "0.25"
 tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 [dev-dependencies]
 futures-util = "0.3"
