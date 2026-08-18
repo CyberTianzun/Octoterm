@@ -253,7 +253,8 @@ impl App {
     }
 }
 
-/// 退出前的清理:**显式**杀掉每一个会话,再停掉 HTTP 层。
+/// 退出前的清理:先停掉 HTTP 层(挡住新连接建新会话),再**显式**杀掉每一个
+/// 已有的会话。
 ///
 /// 不依赖 winit、不弹对话框,好让「退出会杀掉全部会话」这条能被测试直接验证。
 ///
@@ -266,16 +267,41 @@ impl App {
 /// 留成孤儿。只有走 `manager.kill(id)`(→ `Session::kill` → `killer.kill()` +
 /// `force_close_pty()`)才是真的杀。**别把这个循环删了。**
 pub fn shutdown(sup: &mut Supervisor) {
+    // 先停 HTTP 层再杀会话,而不是反过来:kill 这几行期间如果 HTTP 层还活着,
+    // 理论上会有一个 WebSocket 客户端在拿到 `manager.list()` 这份快照**之后**、
+    // 循环把它 kill 掉**之前**发一条 `NewSession`——那个新会话就漏在快照外面,
+    // 逃过这次 kill,变成孤儿。先 `stop()` 关掉 accept 循环能挡住*新连接*建
+    // 新会话。
+    //
+    // 但这堵不死:`Supervisor::stop` 自己的文档写清楚了,已经升级完成的旧
+    // WebSocket 不受 abort 影响,会带着旧 AppState 继续跑到客户端自己断开 ——
+    // 这样的客户端理论上仍能在 `stop()` 之后、kill 循环跑到它之前发
+    // `NewSession`。所以这个改动只是把竞争窗口从「HTTP 层整个存活期间」收窄到
+    // 「一条已升级的旧 WebSocket 连接期间」,不是把这条竞争消除了。
+    sup.stop();
+
     // 先把 id 收集出来再杀:`kill` 会改 manager 内部的 map,不能边遍历边改。
     let ids: Vec<u64> = sup.manager().list().iter().map(|s| s.id).collect();
     if !ids.is_empty() {
         tracing::info!(count = ids.len(), "退出:正在终止全部会话");
     }
     for id in ids {
+        // 返回值(是否真的杀到了)故意丢弃:false 只代表会话在这期间自己退出了
+        // (比如 shell 自然退出),是良性竞争。`SessionManager::kill` 在找不到
+        // 会话时会自己打一条 `warn!("kill: no such session")`——这不是故障,
+        // 退出日志里出现这条不代表哪里坏了,不必因此去改 server 侧的日志级别
+        // (server 代码不允许改动)。
         sup.manager().kill(id);
     }
-    sup.stop();
 }
+
+/// 「退出」按钮的文案。按钮上显示的文案与下面判断返回值时比较的字符串必须是
+/// **同一份**:两处各写一遍字面量的话,以后改按钮文案很容易只改一处、忘了改
+/// 比较那一处 —— macOS 上没有 `Ok` 兜底(见下方判断逻辑),那样会静默变成
+/// 「有会话时永远退不出去」,而且不会有任何编译错误或测试失败提醒你。
+const QUIT_LABEL: &str = "退出";
+/// 同上,「取消」按钮的文案,和 `QUIT_LABEL` 共用同一处定义原因。
+const CANCEL_LABEL: &str = "取消";
 
 /// 有活跃会话时确认;没有会话就别打扰用户。返回 true 表示「确认退出」。
 ///
@@ -284,7 +310,7 @@ pub fn shutdown(sup: &mut Supervisor) {
 ///
 /// 平台差异(rfd 0.15.4 实测,与 brief 的写法有出入):
 /// * macOS 无父窗口时走 `CFUserNotificationDisplayAlert`,自定义按钮文案生效,
-///   点第一个按钮返回 `Custom("退出")`;
+///   点第一个按钮返回 `Custom(QUIT_LABEL)`;
 /// * Windows 在**没开** `common-controls-v6` 特性时,`OkCancelCustom` 会退化成
 ///   普通的 `MessageBoxW(MB_OKCANCEL)`,按钮是系统本地化的「确定 / 取消」,返回的
 ///   是 `MessageDialogResult::Ok` 而**不是** `Custom`。所以这里两种都认,只比
@@ -300,9 +326,9 @@ fn confirm_quit(sessions: usize) -> bool {
         .set_description(format!(
             "还有 {sessions} 个会话正在运行。退出会终止它们,里面跑的程序都会被杀掉。"
         ))
-        .set_buttons(rfd::MessageButtons::OkCancelCustom("退出".into(), "取消".into()))
+        .set_buttons(rfd::MessageButtons::OkCancelCustom(QUIT_LABEL.into(), CANCEL_LABEL.into()))
         .show();
-    matches!(result, rfd::MessageDialogResult::Custom(ref s) if s == "退出")
+    matches!(result, rfd::MessageDialogResult::Custom(ref s) if s == QUIT_LABEL)
         || result == rfd::MessageDialogResult::Ok
 }
 

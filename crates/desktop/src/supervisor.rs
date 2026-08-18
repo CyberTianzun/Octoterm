@@ -148,9 +148,28 @@ impl Supervisor {
 }
 
 impl Drop for Supervisor {
-    /// 别把 accept 循环连同它占着的端口一起漏掉。abort 不要求当前在 runtime 里,
-    /// runtime 已经关掉时也是安全的空操作。
+    /// 别把 accept 循环连同它占着的端口一起漏掉,也别把会话漏了。
+    ///
+    /// 目前只有托盘「退出」这一条路会调用 `app::shutdown()` 显式逐个
+    /// `manager.kill(id)`。`App` 自己没有 `Drop`,如果 `run_app` 因为别的原因
+    /// (非 `Quit` 菜单项触发的提前返回)结束,`App` 被丢弃时孤儿会话问题会原样
+    /// 回来 —— 这里补一道保底:`Supervisor` 被丢弃时,把当时还挂着的会话也
+    /// 一并杀掉。
+    ///
+    /// 和 `app::shutdown()` 里的显式循环不冲突:走过 `shutdown()` 的正常退出
+    /// 路径此时 `manager.list()` 已经是空的,这里的循环是空转。
+    ///
+    /// 不会拖慢或卡住进程退出:`Session::kill()`(→ `killer.kill()` +
+    /// `force_close_pty()`)只是发出终止信号、关掉 pty 的 writer/master 句柄,
+    /// 不等待子进程被 wait 线程真正 reap,是同步且非阻塞的。abort 同样不要求
+    /// 当前在 runtime 里,runtime 已经关掉时也是安全的空操作。
     fn drop(&mut self) {
+        let ids: Vec<u64> = self.manager.list().iter().map(|s| s.id).collect();
+        for id in ids {
+            // 返回值丢弃的原因见 `app::shutdown()` 里同样的调用点:false 只是
+            // 良性竞争(会话已经自己退出),不代表这里出了问题。
+            self.manager.kill(id);
+        }
         self.stop();
     }
 }

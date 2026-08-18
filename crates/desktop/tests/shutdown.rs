@@ -34,8 +34,13 @@ async fn shutdown_kills_every_session() {
     assert!(sup.manager().list().is_empty(), "退出后 manager 里不该还剩会话");
     assert!(sup.listen().is_none(), "退出后 HTTP 层该停了");
 
-    // 从列表里摘掉只是记账。真正要证明的是 pty / 子进程也拆了 —— `has_exited`
-    // 由 wait 线程在子进程收尸后置位,`Session::kill` 走到了它才会变 true。
+    // 从列表里摘掉只是记账,下面这段轮询证明的是「kill 确实走到了
+    // force_close_pty,收尾线程也确实跑完了」—— 但不严格等于「子进程被 reap
+    // 了」。`has_exited` 由读线程和 wait 线程任一个先跑到就会置位:`kill()`
+    // 保证会关 pty master,读线程因此必然 EOF 并置位,这一步和子进程有没有真的
+    // 退出无关;真正确认子进程收尸的是 wait 线程,而 `crates/server/src/session
+    // /pty.rs` 自己写明 `WinChildKiller` 的返回值不可信。所以这条断言证明的是
+    // 「kill 路径走到底、没有半途卡住」,不是「子进程一定被回收了」。
     for (name, s) in [("a", &a), ("b", &b)] {
         let mut exited = false;
         for _ in 0..200 {

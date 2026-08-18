@@ -42,102 +42,129 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
     let mut outcome = Outcome::None;
 
     egui::CentralPanel::default().show(ui, |ui| {
-        ui.add_space(4.0);
+        // 整个窗口内容包一层竖直滚动:配置解析失败 + 监听失败叠加时,`banner`
+        // 能长到 9 行左右(toml::de::Error 的 Display 自带 6 行位置指示片段),
+        // 460×460 的窗口现在勉强装得下,但设置窗口正是「起不来时唯一的出路」——
+        // 装不下就等于没有出路。这层 ScrollArea 是很便宜的保险,常态下(没有
+        // banner)内容够短,不会触发滚动,视觉上没有变化。
+        //
+        // 布局选择:滚动区域包含**全部**内容,包括底部的「取消 / 保存并应用」
+        // 按钮 —— 没有另外用 `TopBottomPanel::bottom` 把按钮钉在底部。banner
+        // 很长时用户可能要先滚到底才能点到保存按钮,这是刻意接受的权衡:这个
+        // 窗口是 460×460 的小对话框,按钮钉底需要额外拆一层 Panel、把当前
+        // 「一个 CentralPanel 里从上画到下」的简单结构复杂化,换来的只是免去
+        // 一次滚动动作,不值得。
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            ui.add_space(4.0);
 
-        if let Some(banner) = &view.banner {
-            ui.colored_label(ERR_COLOR, banner.as_str());
-            ui.add_space(6.0);
-        }
+            if let Some(banner) = &view.banner {
+                ui.colored_label(ERR_COLOR, banner.as_str());
+                ui.add_space(6.0);
+            }
 
-        // 表单一被改动就把上一次的保存结果抹掉:保存成功后接着改端口,绿色的
-        // 「已生效 · …」还挂在那里,说的已经不是当前表单里这套值了。
-        // 纯赋值,不违反「同一帧可能跑两趟」的约束。
-        let mut edited = false;
+            // 表单一被改动就把上一次的保存结果抹掉:保存成功后接着改端口,绿色的
+            // 「已生效 · …」还挂在那里,说的已经不是当前表单里这套值了。
+            // 纯赋值,不违反「同一帧可能跑两趟」的约束。
+            let mut edited = false;
 
-        egui::Grid::new("settings").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
-            ui.label("监听地址");
+            egui::Grid::new("settings")
+                .num_columns(2)
+                .spacing([12.0, 10.0])
+                .show(ui, |ui| {
+                    ui.label("监听地址");
+                    ui.horizontal(|ui| {
+                        edited |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut view.form.host)
+                                    .desired_width(140.0),
+                            )
+                            .changed();
+                        ui.label(":");
+                        edited |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut view.form.port).desired_width(60.0),
+                            )
+                            .changed();
+                    });
+                    ui.end_row();
+
+                    ui.label("访问 token");
+                    ui.horizontal(|ui| {
+                        edited |= ui
+                            .add(
+                                egui::TextEdit::singleline(&mut view.form.token)
+                                    .desired_width(180.0),
+                            )
+                            .changed();
+                        if ui.button("重新生成").clicked() {
+                            outcome = Outcome::RegenerateToken;
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("");
+                    ui.small(
+                        "留空表示不固定:不写进 config.toml,每次启动随机生成。\n\
+                     本次运行沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
+                    );
+                    ui.end_row();
+
+                    ui.label("会话尺寸策略");
+                    ui.horizontal(|ui| {
+                        ui.label(view.window_size.as_str());
+                        ui.small("(在 config.toml 中修改)");
+                    });
+                    ui.end_row();
+
+                    ui.label("开机自启");
+                    edited |= ui.checkbox(&mut view.form.autostart, "").changed();
+                    ui.end_row();
+                });
+
+            ui.add_space(8.0);
+            ui.separator();
             ui.horizontal(|ui| {
-                edited |= ui
-                    .add(egui::TextEdit::singleline(&mut view.form.host).desired_width(140.0))
-                    .changed();
-                ui.label(":");
-                edited |= ui
-                    .add(egui::TextEdit::singleline(&mut view.form.port).desired_width(60.0))
-                    .changed();
-            });
-            ui.end_row();
-
-            ui.label("访问 token");
-            ui.horizontal(|ui| {
-                edited |= ui
-                    .add(egui::TextEdit::singleline(&mut view.form.token).desired_width(180.0))
-                    .changed();
-                if ui.button("重新生成").clicked() {
-                    outcome = Outcome::RegenerateToken;
+                ui.label("启动项");
+                if ui.button("打开 config.toml").clicked() {
+                    outcome = Outcome::OpenConfigFile;
                 }
             });
-            ui.end_row();
-
-            ui.label("");
-            ui.small(
-                "留空表示不固定:不写进 config.toml,每次启动随机生成。\n\
-                 本次运行沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
-            );
-            ui.end_row();
-
-            ui.label("会话尺寸策略");
-            ui.horizontal(|ui| {
-                ui.label(view.window_size.as_str());
-                ui.small("(在 config.toml 中修改)");
-            });
-            ui.end_row();
-
-            ui.label("开机自启");
-            edited |= ui.checkbox(&mut view.form.autostart, "").changed();
-            ui.end_row();
-        });
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("启动项");
-            if ui.button("打开 config.toml").clicked() {
-                outcome = Outcome::OpenConfigFile;
-            }
-        });
-        egui::ScrollArea::vertical().max_height(110.0).show(ui, |ui| {
-            if view.launchers.is_empty() {
-                ui.small("(只有内置项)");
-            }
-            for (name, command) in &view.launchers {
-                ui.horizontal(|ui| {
-                    ui.label(name.as_str());
-                    ui.small(command.as_str());
+            egui::ScrollArea::vertical()
+                .max_height(110.0)
+                .show(ui, |ui| {
+                    if view.launchers.is_empty() {
+                        ui.small("(只有内置项)");
+                    }
+                    for (name, command) in &view.launchers {
+                        ui.horizontal(|ui| {
+                            ui.label(name.as_str());
+                            ui.small(command.as_str());
+                        });
+                    }
                 });
-            }
-        });
 
-        // 「重新生成」也算改动:token 已经不是保存时那个了。
-        if edited || outcome == Outcome::RegenerateToken {
-            view.message = None;
-        }
-
-        ui.add_space(8.0);
-        if let Some(msg) = &view.message {
-            match msg {
-                Message::Ok(t) => ui.colored_label(OK_COLOR, t.as_str()),
-                Message::Err(t) => ui.colored_label(ERR_COLOR, t.as_str()),
-            };
-        }
-
-        ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("取消").clicked() {
-                outcome = Outcome::Cancel;
+            // 「重新生成」也算改动:token 已经不是保存时那个了。
+            if edited || outcome == Outcome::RegenerateToken {
+                view.message = None;
             }
-            if ui.button("保存并应用").clicked() {
-                outcome = Outcome::Save;
+
+            ui.add_space(8.0);
+            if let Some(msg) = &view.message {
+                match msg {
+                    Message::Ok(t) => ui.colored_label(OK_COLOR, t.as_str()),
+                    Message::Err(t) => ui.colored_label(ERR_COLOR, t.as_str()),
+                };
             }
+
+            ui.separator();
+            ui.horizontal(|ui| {
+                if ui.button("取消").clicked() {
+                    outcome = Outcome::Cancel;
+                }
+                if ui.button("保存并应用").clicked() {
+                    outcome = Outcome::Save;
+                }
+            });
         });
     });
 
