@@ -22,7 +22,15 @@ fn main() -> Result<()> {
 
     // 配置读不出来不是致命错误:托盘照样要出来,用户才有地方修它(见 Task 9)
     let config = Config::load(None).unwrap_or_default();
-    let (token, _) = octoterm_server::config::resolve_token(None, config.token.clone());
+    // 空白 token 要在这里归一成「没配」:`resolve_token` 只区分 Some/None,
+    // config.toml 里写成 `token = ""` 会被它当作一个货真价实的 token 交出去,而
+    // server 侧鉴权是 `token == state.token` 的直接比较 —— 空对空一律放行。这条
+    // 路径很现实:设置界面写着「留空表示不固定」,旁边还有「打开 config.toml」
+    // 按钮把用户直接引到文件里。(过滤放在 desktop 侧,不动 server 的 resolve_token。)
+    let (token, _) = octoterm_server::config::resolve_token(
+        None,
+        config.token.clone().filter(|t| !t.trim().is_empty()),
+    );
 
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -31,7 +39,10 @@ fn main() -> Result<()> {
 
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers);
     if let Err(e) = rt.block_on(sup.restart(config.listen, token)) {
-        tracing::error!(error = %e, "启动时监听失败");
+        // 用 `{e:#}` 而不是 `%e`:`%e` 只有最外层的 “无法监听 127.0.0.1:7683”,
+        // 而用户真正需要的是里层原因(端口被占用 还是 权限不足)。托盘「查看日志」
+        // 是他唯一能看到启动失败原因的地方。
+        tracing::error!(error = %format!("{e:#}"), "启动时监听失败");
     }
 
     let mut builder = EventLoop::<UserEvent>::with_user_event();

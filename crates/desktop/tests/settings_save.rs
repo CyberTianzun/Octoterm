@@ -5,7 +5,11 @@
 //! 1. 错误是**带 cause 链**的 anyhow(真实现里 `restart` / `save_config` 的错误
 //!    都被 `.with_context()` 包过一层),这样才守得住「提示文案要用 `{e:#}`」;
 //! 2. 每个方法的调用都记进同一条 `calls` 日志,顺序因此是可断言的事实,而不是
-//!    靠两个独立的 Vec 猜出来的。
+//!    靠两个独立的 Vec 猜出来的;
+//! 3. `restart` 会按 `Supervisor::restart` 的两条路径改 `listening` —— 同地址是
+//!    「先 stop 再 bind」,失败之后服务是**停着**的;换地址是「先 bind 后关」,
+//!    失败之后旧的还在跑。不模拟这个副作用的话,restart 失败那两条测试就只能
+//!    断言提示文案,断不到状态。
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -31,6 +35,9 @@ struct FakeFx {
     restart_err: bool,
     /// restart 实际监听到的地址;None 表示「就是请求的那个」。
     actual: Option<SocketAddr>,
+    /// 假的 HTTP 层现状,由 `restart` 按 supervisor 的两条路径改。初值必须和
+    /// 传给 `apply` 的 `Current::listen` 对上(见 `fx_running`)。
+    listening: Option<SocketAddr>,
 
     /// 各方法被调用的**全局顺序**。
     calls: Vec<&'static str>,
@@ -75,13 +82,21 @@ impl Effects for FakeFx {
     fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr> {
         self.calls.push("restart");
         self.restarts.push((listen, token));
+        // 照 `Supervisor::restart` 的两条路径改状态:地址没变时它**先 stop() 再
+        // bind**,所以失败之后是「完全没有 HTTP 层」;地址有变化时先 bind 新的、
+        // 成功了才关旧的,失败之后旧的原封不动还在跑。
+        if self.listening == Some(listen) {
+            self.listening = None;
+        }
         if self.restart_err {
             // 同上:真实现是 TcpListener::bind 的 io::Error 外面包
             // `.with_context(|| format!("无法监听 {listen}"))`
             return Err(anyhow!("Address already in use (os error 48)")
                 .context(format!("无法监听 {listen}")));
         }
-        Ok(self.actual.unwrap_or(listen))
+        let actual = self.actual.unwrap_or(listen);
+        self.listening = Some(actual);
+        Ok(actual)
     }
 
     fn new_token(&mut self) -> String {
@@ -96,6 +111,12 @@ fn addr(s: &str) -> SocketAddr {
 
 fn current() -> Current {
     Current { listen: Some(addr("127.0.0.1:7683")), token: Some("tok".into()), sessions: 2 }
+}
+
+/// 和 [`current`] 配套的假实现:HTTP 层正跑在同一个地址上。用 `..fx_running()`
+/// 而不是 `..Default::default()`,`listening` 才不会和 `Current::listen` 说两套话。
+fn fx_running() -> FakeFx {
+    FakeFx { listening: current().listen, ..Default::default() }
 }
 
 /// 当前没在监听:没有地址,也没有「生效的 token」。
@@ -123,7 +144,7 @@ fn ok_text(applied: &Applied) -> &str {
 
 #[test]
 fn an_invalid_form_touches_nothing() {
-    let mut fx = FakeFx::default();
+    let mut fx = fx_running();
     let applied = apply(&form("not-an-ip", "7683", "tok"), &current(), &mut fx);
 
     assert!(err_text(&applied).contains("不是合法的 IP 地址"));
@@ -134,7 +155,7 @@ fn an_invalid_form_touches_nothing() {
 
 #[test]
 fn an_autostart_failure_stops_before_touching_anything_else() {
-    let mut fx = FakeFx { autostart_err: true, ..Default::default() };
+    let mut fx = FakeFx { autostart_err: true, ..fx_running() };
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     let text = err_text(&applied);
@@ -148,7 +169,7 @@ fn an_autostart_failure_stops_before_touching_anything_else() {
 
 #[test]
 fn no_rebind_needed_means_only_writing_the_file() {
-    let mut fx = FakeFx::default();
+    let mut fx = fx_running();
     // 地址没变、token 也没变,只是把 token 改成「不固定」不算变化
     let applied = apply(&form("127.0.0.1", "7683", ""), &current(), &mut fx);
 
@@ -161,7 +182,7 @@ fn no_rebind_needed_means_only_writing_the_file() {
 
 #[test]
 fn a_write_failure_without_rebind_is_reported_as_is() {
-    let mut fx = FakeFx { save_err: true, ..Default::default() };
+    let mut fx = FakeFx { save_err: true, ..fx_running() };
     let applied = apply(&form("127.0.0.1", "7683", "tok"), &current(), &mut fx);
 
     let text = err_text(&applied);
@@ -174,7 +195,7 @@ fn a_write_failure_without_rebind_is_reported_as_is() {
 
 #[test]
 fn a_changed_address_restarts_first_then_writes() {
-    let mut fx = FakeFx::default();
+    let mut fx = fx_running();
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     assert_eq!(ok_text(&applied), "已生效 · 127.0.0.1:9000 · 2 个会话未受影响");
@@ -186,11 +207,12 @@ fn a_changed_address_restarts_first_then_writes() {
         fx.saved,
         vec![Editable { listen: addr("127.0.0.1:9000"), token: Some("tok".into()) }]
     );
+    assert_eq!(fx.listening, Some(addr("127.0.0.1:9000")), "成功之后应当跑在新地址上");
 }
 
 #[test]
 fn the_message_reports_the_address_actually_bound() {
-    let mut fx = FakeFx { actual: Some(addr("127.0.0.1:54321")), ..Default::default() };
+    let mut fx = FakeFx { actual: Some(addr("127.0.0.1:54321")), ..fx_running() };
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     assert!(ok_text(&applied).contains("127.0.0.1:54321"));
@@ -198,7 +220,7 @@ fn the_message_reports_the_address_actually_bound() {
 
 #[test]
 fn an_empty_token_restarts_with_the_current_one() {
-    let mut fx = FakeFx::default();
+    let mut fx = fx_running();
     let applied = apply(&form("127.0.0.1", "9000", ""), &current(), &mut fx);
 
     assert!(applied.restarted);
@@ -210,7 +232,7 @@ fn an_empty_token_restarts_with_the_current_one() {
 
 #[test]
 fn a_write_failure_after_restart_says_applied_but_not_saved() {
-    let mut fx = FakeFx { save_err: true, ..Default::default() };
+    let mut fx = FakeFx { save_err: true, ..fx_running() };
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     let text = err_text(&applied);
@@ -223,7 +245,7 @@ fn a_write_failure_after_restart_says_applied_but_not_saved() {
 
 #[test]
 fn a_failed_restart_keeps_the_old_server_and_writes_nothing() {
-    let mut fx = FakeFx { restart_err: true, ..Default::default() };
+    let mut fx = FakeFx { restart_err: true, ..fx_running() };
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     let text = err_text(&applied);
@@ -236,17 +258,21 @@ fn a_failed_restart_keeps_the_old_server_and_writes_nothing() {
     // 但开机自启已经改掉了:它在校验之后第一个执行,之后失败也不回滚
     assert_eq!(fx.autostart_calls, vec![false], "自启是先改的,失败不回滚");
     assert_eq!(fx.calls, vec!["autostart", "config_path", "restart"]);
+    // 文案说「原服务仍在 …… 上运行」,状态得真是这样
+    assert_eq!(fx.listening, current().listen, "换地址失败时旧的应当原封不动");
 }
 
 #[test]
 fn a_failed_same_address_restart_says_the_service_is_down() {
-    let mut fx = FakeFx { restart_err: true, ..Default::default() };
+    let mut fx = FakeFx { restart_err: true, ..fx_running() };
     // 地址不变、只换 token:supervisor 会先 stop() 再 bind,失败就没有 HTTP 层了
     let applied = apply(&form("127.0.0.1", "7683", "new"), &current(), &mut fx);
 
     let text = err_text(&applied);
     assert!(text.contains("无法监听 127.0.0.1:7683"), "{text}");
     assert!(text.contains("服务当前未监听"), "同地址失败后服务是停着的:{text}");
+    // 不只是文案:supervisor 走这条路径时已经先 stop() 了,服务真的停着
+    assert_eq!(fx.listening, None, "同地址失败之后不该还有 HTTP 层");
 }
 
 #[test]
@@ -285,9 +311,32 @@ fn an_empty_current_token_is_not_a_token() {
     assert_eq!(token, FRESH_TOKEN, "空串不是 token");
 }
 
+/// C1-R1(安全):服务**正带着空 token 在跑**(比如 config.toml 里写了
+/// `token = ""`)+ 表单 token 留空 + 地址没改。`needs_rebind(listen, "", token: None)`
+/// 是 false,于是整套三级回退所在的代码根本不会被执行 —— 请求从 `!rebind` 那条
+/// 提前返回直接出去,空 token 的 HTTP 层原封不动继续对所有人放行,用户却看到一句
+/// 绿字「已保存」。空串必须和「没在监听」同等对待:强制重建。
+#[test]
+fn a_running_empty_token_forces_a_rebind_at_the_same_address() {
+    let mut fx = FakeFx { listening: Some(addr("127.0.0.1:7683")), ..Default::default() };
+    let current =
+        Current { listen: Some(addr("127.0.0.1:7683")), token: Some(String::new()), sessions: 3 };
+    // 地址一个字没改、token 框留空 —— 修复前这一组是「什么都不用做」
+    let applied = apply(&form("127.0.0.1", "7683", ""), &current, &mut fx);
+
+    assert!(applied.restarted, "带着空 token 在跑就必须重建,不能只写文件了事");
+    assert!(fx.calls.contains(&"restart"), "{:?}", fx.calls);
+    let (listen, token) = fx.restarts.first().expect("必须真的重启一次");
+    assert_eq!(*listen, addr("127.0.0.1:7683"));
+    assert_eq!(token, FRESH_TOKEN, "空串不是 token,得现场生成一个");
+    assert!(fx.calls.contains(&"new_token"));
+    // 表单说了「不固定」,新生成的这个只作用于本次运行,不落盘
+    assert_eq!(fx.saved, vec![Editable { listen: addr("127.0.0.1:7683"), token: None }]);
+}
+
 #[test]
 fn an_unavailable_config_path_stops_everything() {
-    let mut fx = FakeFx { path_err: true, ..Default::default() };
+    let mut fx = FakeFx { path_err: true, ..fx_running() };
     let applied = apply(&form("127.0.0.1", "9000", "tok"), &current(), &mut fx);
 
     assert!(err_text(&applied).contains("无法确定配置目录"));
@@ -297,7 +346,7 @@ fn an_unavailable_config_path_stops_everything() {
 
 #[test]
 fn the_autostart_checkbox_is_passed_through() {
-    let mut fx = FakeFx::default();
+    let mut fx = fx_running();
     let mut f = form("127.0.0.1", "7683", "tok");
     f.autostart = true;
     apply(&f, &current(), &mut fx);

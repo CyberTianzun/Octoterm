@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
 use octoterm_server::app::{serve, AppState};
 use octoterm_server::config::{LauncherSpec, WindowSize};
 use octoterm_server::launcher::LauncherProvider;
@@ -65,7 +65,27 @@ impl Supervisor {
     /// 注意这两条路径失败后的状态不同:地址有变化时失败了旧的还在跑,`self` 原封
     /// 不动;地址没变时旧的已经关掉了,重试仍失败就只能停在"没有 HTTP 层"上,
     /// 由调用方决定是提示用户还是换个地址再来。
+    ///
+    /// **空 token 一律拒绝**,见函数体开头的 `ensure!`。
     pub async fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr> {
+        // 这里是所有 token 进入 `AppState` 的**唯一收口**(desktop 里只有 main.rs 的
+        // 启动路径和 app.rs 的 `AppEffects` 两个调用方,都得过这一关)。server 侧的
+        // `bearer_ok` 与 WebSocket 握手都是 `token == state.token` 的直接比较,空
+        // token 对空 token 一律放行 —— 等于把鉴权整个关掉;配上用户改成 `0.0.0.0`
+        // 的监听地址,就是一个全网卡、无鉴权的终端服务。
+        //
+        // 两个刻意的选择:
+        // 1. 用 `ensure!` 而不是 `debug_assert!` —— release 构建里断言是不存在的,
+        //    而这是一条安全边界,必须在正式构建里也拦得住;
+        // 2. 放在函数**最前面**,在任何 bind / stop 之前 —— 同地址那条路径会先
+        //    `stop()`,晚一步拦就会变成「已经把旧的关了才发现 token 是空的」。
+        //
+        // 顺带把纯空白也算作空:HTTP 头里的 `Authorization: Bearer   ` 经过解析后
+        // 剩不下什么,当 token 用和空串没有区别。
+        ensure!(
+            !token.trim().is_empty(),
+            "拒绝用空 token 启动 HTTP 层:server 侧鉴权会全部放行"
+        );
         let same_addr = self.running.as_ref().is_some_and(|r| r.listen == listen);
         let (listener, actual) = if same_addr {
             self.stop();
@@ -93,7 +113,7 @@ impl Supervisor {
         };
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {
-                tracing::error!(error = %e, "http 层异常退出");
+                tracing::error!(error = %format!("{e:#}"), "http 层异常退出");
             }
         });
         tracing::info!(%actual, "http 层已就绪");

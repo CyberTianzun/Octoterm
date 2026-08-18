@@ -92,9 +92,17 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
         Err(e) => return Applied::err(format!("{e:#}")),
     };
 
+    // 注意这里的 `!token.trim().is_empty()`:**空串不是 token**,当前正带着空
+    // token 在跑,和「当前没在监听」一样要强制重建。少了这个条件,
+    // `needs_rebind(listen, "", &Editable { token: None })` 会算出 false,于是
+    // 「服务带着空 token 在跑 + 表单 token 留空 + 地址没改」这一组会从下面
+    // `if !rebind` 那条提前返回直接溜走 —— 底下的三级回退一行都跑不到,空 token
+    // 的 HTTP 层原封不动继续对所有人放行,用户看到的却是绿字「已保存」。
     let rebind = match (current.listen, current.token.as_deref()) {
-        (Some(listen), Some(token)) => needs_rebind(listen, token, &next),
-        // 当前没在监听,无论如何都要试着起来
+        (Some(listen), Some(token)) if !token.trim().is_empty() => {
+            needs_rebind(listen, token, &next)
+        }
+        // 当前没在监听、或当前 token 是空的:无论如何都要(重新)起来
         _ => true,
     };
 
@@ -117,11 +125,15 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
     let token = match next.token.clone() {
         Some(t) => t,
         None => match current.token.clone() {
-            Some(t) if !t.is_empty() => t,
+            Some(t) if !t.trim().is_empty() => t,
             _ => fx.new_token(),
         },
     };
-    debug_assert!(!token.is_empty(), "空 token 会让 server 侧鉴权全部放行");
+    // 本地的一道保险,不是最后一道:真正的收口在
+    // [`crate::supervisor::Supervisor::restart`] 的 `ensure!` —— 那里 release 构建
+    // 也生效,而且是所有 token 进入 `AppState` 的必经之路。这里留一条断言只是为了
+    // 在单测(用假的 `Effects`,够不着 supervisor)里就地炸掉。
+    debug_assert!(!token.trim().is_empty(), "空 token 会让 server 侧鉴权全部放行");
 
     match fx.restart(next.listen, token) {
         Ok(actual) => {

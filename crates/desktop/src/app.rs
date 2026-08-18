@@ -137,6 +137,24 @@ impl App {
         // 已经先 stop() 了)——只在成功时刷新的话,状态行会一直挂着已经失效的
         // 旧地址和会话数。刷新本身只是重读一次当前状态,多调用没有代价。
         self.refresh_status();
+
+        // 把**实际生效**的 token 写回表单。「表单留空 + 服务没在监听」时 save.rs 会
+        // 当场生成一个新 token,不写回的话用户在这个窗口里根本看不到它是什么 ——
+        // 退路只有关窗去托盘点「复制访问链接」,而界面上没有任何提示告诉他这一点。
+        //
+        // 只在 restarted 时写:校验失败、自启失败这些路径上服务没动过,写回去只会
+        // 把用户正在输入的内容冲掉。写进去之后再点一次保存会把它固化进 config.toml,
+        // 这和开窗时 `build_view` 回填当前 token 的效果一致,不是新增的行为。
+        //
+        // 位置:`RedrawRequested` 里 `redraw_ui` 闭包的**外面**(闭包同一帧可能被
+        // 跑两趟),`apply_settings` 整个都在闭包外,这里同样是一次性副作用。
+        if applied.restarted
+            && let Some(token) = self.sup.token().map(str::to_string)
+            && let Some(view) = self.view.as_mut()
+        {
+            view.form.token = token;
+        }
+
         if let Some(view) = self.view.as_mut() {
             view.message = Some(applied.message);
         }
@@ -236,7 +254,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.tray = Some(tray);
                 }
                 Err(e) => {
-                    tracing::error!(error = %e, "托盘创建失败");
+                    tracing::error!(error = %format!("{e:#}"), "托盘创建失败");
                     return;
                 }
             }
@@ -251,7 +269,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::MenuClicked(MenuAction::OpenWeb) => match self.url() {
                 Some(url) => {
                     if let Err(e) = open::that_detached(url) {
-                        tracing::error!(error = %e, "打开浏览器失败");
+                        tracing::error!(error = %format!("{e:#}"), "打开浏览器失败");
                     }
                 }
                 // http 层没监听成功(比如端口被占用),点了菜单却什么都不会发生——
@@ -261,13 +279,13 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::MenuClicked(MenuAction::CopyUrl) => match self.url() {
                 Some(url) => match arboard::Clipboard::new().and_then(|mut c| c.set_text(url)) {
                     Ok(()) => {}
-                    Err(e) => tracing::error!(error = %e, "复制到剪贴板失败"),
+                    Err(e) => tracing::error!(error = %format!("{e:#}"), "复制到剪贴板失败"),
                 },
                 None => tracing::warn!("尚未监听,无法复制访问链接"),
             },
             UserEvent::MenuClicked(MenuAction::ViewLogs) => {
                 if let Err(e) = open::that_detached(&self.log_path) {
-                    tracing::error!(error = %e, "打开日志失败");
+                    tracing::error!(error = %format!("{e:#}"), "打开日志失败");
                 }
             }
             UserEvent::MenuClicked(MenuAction::Settings) => {
@@ -278,7 +296,7 @@ impl ApplicationHandler<UserEvent> for App {
                     match EguiWindow::open(event_loop, "octoterm 设置", (460, 460)) {
                         Ok(w) => self.settings_window = Some(w),
                         Err(e) => {
-                            tracing::error!(error = %e, "无法打开设置窗口");
+                            tracing::error!(error = %format!("{e:#}"), "无法打开设置窗口");
                             self.view = None;
                         }
                     }
@@ -326,10 +344,10 @@ impl ApplicationHandler<UserEvent> for App {
                     Outcome::OpenConfigFile => match crate::configfile::default_path() {
                         Ok(p) => {
                             if let Err(e) = open::that_detached(&p) {
-                                tracing::error!(error = %e, "打开配置文件失败");
+                                tracing::error!(error = %format!("{e:#}"), "打开配置文件失败");
                             }
                         }
-                        Err(e) => tracing::error!(error = %e, "无法确定配置文件位置"),
+                        Err(e) => tracing::error!(error = %format!("{e:#}"), "无法确定配置文件位置"),
                     },
                     Outcome::RegenerateToken => {
                         if let Some(view) = self.view.as_mut() {

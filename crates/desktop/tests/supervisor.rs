@@ -70,6 +70,40 @@ async fn a_failed_bind_leaves_the_old_listener_running() {
     assert!(tokio::net::TcpStream::connect(addr).await.is_ok(), "旧 listener 被误关了");
 }
 
+/// 收口:`Supervisor::restart` 是所有 token 进入 `AppState` 的必经之路,空 token
+/// 一律拒绝 —— server 侧 `bearer_ok` 与 WebSocket 握手都是 `token == state.token`
+/// 的直接比较,空对空就是把鉴权整个关掉。
+///
+/// 关键在于「**不产生任何副作用**」:同地址那条路径是先 `stop()` 再 bind,拦得晚
+/// 一步就会变成「已经把旧的关了,才发现 token 是空的」—— 用户原来还能用的服务被
+/// 一次失败的保存弄没了。所以这里既断言返回 Err,也断言旧的 listener 仍在跑。
+#[tokio::test]
+async fn an_empty_token_is_refused_without_touching_the_running_listener() {
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
+
+    // 同地址 + 空 token:最危险的那一组(先 stop 再 bind)
+    let err = sup.restart(addr, String::new()).await.unwrap_err();
+    assert!(format!("{err:#}").contains("空 token"), "{err:#}");
+    // 纯空白同样不算 token
+    let err = sup.restart(addr, "   ".into()).await.unwrap_err();
+    assert!(format!("{err:#}").contains("空 token"), "{err:#}");
+
+    assert_eq!(sup.listen(), Some(addr), "拒绝之后不该动已有的 HTTP 层");
+    assert_eq!(sup.token(), Some("t"), "旧 token 应当原封不动");
+    assert!(tokio::net::TcpStream::connect(addr).await.is_ok(), "旧 listener 被误关了");
+}
+
+/// 从来没起来过的时候也一样拒绝,而不是「反正没有东西可丢,就让它跑起来」。
+#[tokio::test]
+async fn an_empty_token_is_refused_even_when_nothing_is_running() {
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let err = sup.restart("127.0.0.1:0".parse().unwrap(), String::new()).await.unwrap_err();
+
+    assert!(format!("{err:#}").contains("空 token"), "{err:#}");
+    assert_eq!(sup.listen(), None, "拒绝之后不该有 HTTP 层");
+}
+
 #[tokio::test]
 async fn stop_releases_the_port_but_not_the_sessions() {
     let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
