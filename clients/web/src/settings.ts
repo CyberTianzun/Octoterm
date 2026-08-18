@@ -17,6 +17,7 @@ import {
   DEFAULT_FONT_FAMILY,
 } from "./config";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
+import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
 
 export interface SettingsHost {
   get(): OctoConfig;
@@ -59,10 +60,15 @@ function numberInput(value: number, min: number, max: number, step: number): HTM
   return i;
 }
 
-function select<T extends string>(options: readonly T[], value: T): HTMLSelectElement {
+/** `label` 缺省时直接显示取值本身(字重那种 CSS 关键字不需要翻译)。 */
+function select<T extends string>(
+  options: readonly T[],
+  value: T,
+  label?: (o: T) => string,
+): HTMLSelectElement {
   const s = el("select");
   for (const o of options) {
-    const opt = el("option", undefined, o);
+    const opt = el("option", undefined, label ? label(o) : o);
     opt.value = o;
     s.appendChild(opt);
   }
@@ -89,6 +95,21 @@ function swatch(theme: ITheme): HTMLElement {
   return s;
 }
 
+/** 光标形状枚举的显示名。block / outline 这些是 xterm 的内部取值,直接摆给
+ *  用户看等于没说。字重那种本身就是 CSS 关键字的枚举则保持原样。 */
+const CURSOR_LABELS: Record<string, MsgKey> = {
+  block: "cursor.block",
+  underline: "cursor.underline",
+  bar: "cursor.bar",
+  outline: "cursor.outline",
+  none: "cursor.none",
+};
+
+const cursorLabel = (v: string): string => {
+  const key = CURSOR_LABELS[v];
+  return key ? t(key) : v;
+};
+
 /** 从字体栈里取第一个族名,用来做「系统装没装」的探测。 */
 function firstFamily(stack: string): string {
   return (stack.split(",")[0] ?? "").trim().replace(/^["']|["']$/g, "");
@@ -99,9 +120,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   overlay.hidden = true;
   const modal = el("div", "set-modal");
   const head = el("div", "set-head");
-  const title = el("span", "set-title", "设置");
+  const title = el("span", "set-title");
   const closeBtn = el("button", "set-close", "✕");
-  closeBtn.title = "关闭 (Esc)";
   head.append(title, closeBtn);
 
   const tabsBar = el("div", "set-tabs");
@@ -111,11 +131,12 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   document.body.appendChild(overlay);
 
   let tab: Tab = "theme";
-  const TABS: [Tab, string][] = [
-    ["theme", "主题"],
-    ["font", "字体"],
-    ["terminal", "终端"],
-    ["io", "导入 / 导出"],
+  // 标签文案在 renderTabs 里现取:切语言后重绘就跟着变了
+  const TABS: [Tab, MsgKey][] = [
+    ["theme", "settings.tab.theme"],
+    ["font", "settings.tab.font"],
+    ["terminal", "settings.tab.terminal"],
+    ["io", "settings.tab.io"],
   ];
 
   /** 改一格配置:浅合并进当前配置并立即应用。 */
@@ -123,8 +144,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
   function renderTabs() {
     tabsBar.innerHTML = "";
-    for (const [id, label] of TABS) {
-      const b = el("button", "set-tab" + (id === tab ? " active" : ""), label);
+    for (const [id, key] of TABS) {
+      const b = el("button", "set-tab" + (id === tab ? " active" : ""), t(key));
       b.addEventListener("click", () => {
         tab = id;
         render();
@@ -141,8 +162,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const search = el("input", "set-search");
     search.type = "search";
     search.placeholder = catalogLoaded()
-      ? `搜索 ${Object.keys(knownThemes()).length} 个主题…`
-      : "搜索主题(正在加载完整目录…)";
+      ? t("settings.theme.search", { n: Object.keys(knownThemes()).length })
+      : t("settings.theme.searchLoading");
     search.value = themeFilter;
     search.addEventListener("input", () => {
       themeFilter = search.value;
@@ -156,7 +177,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       const entries = Object.entries(knownThemes())
         .filter(([name]) => q === "" || name.toLowerCase().includes(q))
         .sort(([a], [b]) => a.localeCompare(b));
-      if (entries.length === 0) return [el("div", "set-empty", "没有匹配的主题")];
+      if (entries.length === 0) return [el("div", "set-empty", t("settings.theme.noMatch"))];
       return entries.slice(0, 400).map(([name, colors]) => {
         const card = el("button", "theme-card" + (name === current ? " active" : ""));
         card.append(swatch(colors), el("span", "theme-name", name));
@@ -177,12 +198,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       });
     }
 
-    const note = el(
-      "div",
-      "set-note",
-      "主题数据来自 mbadolato/iTerm2-Color-Schemes(MIT)。想要目录里没有的配色," +
-        "在「导入 / 导出」里直接改 theme.colors 即可。",
-    );
+    const note = el("div", "set-note", t("settings.theme.note"));
     wrap.appendChild(note);
     return wrap;
   }
@@ -203,10 +219,10 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       if (first === "") {
         avail.textContent = "";
       } else if (generic || document.fonts?.check?.(`12px "${first}"`)) {
-        avail.textContent = `✓ 首选族「${first}」可用`;
+        avail.textContent = t("settings.font.available", { name: first });
         avail.className = "set-note ok";
       } else {
-        avail.textContent = `⚠ 系统里找不到「${first}」,会回落到栈里的下一个`;
+        avail.textContent = t("settings.font.missing", { name: first });
         avail.className = "set-note warn";
       }
     };
@@ -218,7 +234,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       checkAvail(family.value);
     });
 
-    const reset = el("button", undefined, "恢复默认字体栈");
+    const reset = el("button", undefined, t("settings.font.reset"));
     reset.addEventListener("click", () => {
       patch((c) => ({ ...c, font: { ...c.font, family: DEFAULT_FONT_FAMILY } }));
       render();
@@ -256,14 +272,14 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     preview.textContent = "iIlL1 oO0 `'\" ─┼┤├ 中文对齐 => != >= 0x1F ~$#@";
 
     wrap.append(
-      row("字体栈", family, "CSS font-family,逗号分隔"),
+      row(t("settings.font.family"), family, t("settings.font.familyHint")),
       avail,
       row("", reset),
-      row("字号", size, "px"),
-      row("行高", lh, "倍"),
-      row("字距", ls, "px"),
-      row("常规字重", w),
-      row("加粗字重", wb),
+      row(t("settings.font.size"), size, t("unit.px")),
+      row(t("settings.font.lineHeight"), lh, t("unit.times")),
+      row(t("settings.font.letterSpacing"), ls, t("unit.px")),
+      row(t("settings.font.weight"), w),
+      row(t("settings.font.weightBold"), wb),
       preview,
     );
     return wrap;
@@ -274,13 +290,14 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const cfg = host.get();
     const wrap = el("div", "set-pane");
 
-    const cs = select(["block", "underline", "bar"] as const, cfg.terminal.cursorStyle);
+    const cs = select(["block", "underline", "bar"] as const, cfg.terminal.cursorStyle, cursorLabel);
     cs.addEventListener("change", () =>
       patch((c) => ({ ...c, terminal: { ...c.terminal, cursorStyle: cs.value as never } })),
     );
     const cis = select(
       ["outline", "block", "bar", "underline", "none"] as const,
       cfg.terminal.cursorInactiveStyle,
+      cursorLabel,
     );
     cis.addEventListener("change", () =>
       patch((c) => ({ ...c, terminal: { ...c.terminal, cursorInactiveStyle: cis.value as never } })),
@@ -309,6 +326,14 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       })),
     );
 
+    const langs: readonly LocalePref[] = ["auto", ...LOCALES];
+    const lang = select(langs, cfg.ui.locale, (l) =>
+      l === "auto" ? t("settings.ui.languageAuto") : LOCALE_NAMES[l],
+    );
+    lang.addEventListener("change", () =>
+      patch((c) => ({ ...c, ui: { ...c.ui, locale: lang.value as LocalePref } })),
+    );
+
     const follow = checkbox(cfg.ui.followThemeColors);
     follow.addEventListener("change", () => {
       patch((c) => ({ ...c, ui: { ...c.ui, followThemeColors: follow.checked } }));
@@ -323,17 +348,18 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     );
 
     wrap.append(
-      row("光标形状", cs),
-      row("失焦光标", cis),
-      row("光标闪烁", blink),
-      row("回滚行数", sb, "行"),
-      row("内置字形绘制", glyphs, "自己画 box-drawing / powerline,不依赖 Nerd Font"),
-      row("最小对比度", contrast, "1 = 不干预;提高可读性但会改写主题色"),
-      row("加粗用亮色", boldBright),
-      el("div", "set-sep", "界面"),
-      row("界面跟随主题配色", follow),
-      row("侧边栏会话预览", prev),
-      row("WebGL 渲染器", webgl, "关闭则回落到 DOM 渲染器"),
+      row(t("settings.term.cursorStyle"), cs),
+      row(t("settings.term.cursorInactive"), cis),
+      row(t("settings.term.cursorBlink"), blink),
+      row(t("settings.term.scrollback"), sb, t("unit.lines")),
+      row(t("settings.term.customGlyphs"), glyphs, t("settings.term.customGlyphsHint")),
+      row(t("settings.term.contrast"), contrast, t("settings.term.contrastHint")),
+      row(t("settings.term.boldBright"), boldBright),
+      el("div", "set-sep", t("settings.ui.section")),
+      row(t("settings.ui.language"), lang),
+      row(t("settings.ui.followTheme"), follow),
+      row(t("settings.ui.sidebarPreview"), prev),
+      row(t("settings.ui.webgl"), webgl, t("settings.ui.webglHint")),
     );
     return wrap;
   }
@@ -356,22 +382,27 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       try {
         result = importConfigJson(text, resolveTheme);
       } catch (err) {
-        say(`${source}失败:不是合法的 JSON(${(err as Error).message})`, "warn");
+        say(t("settings.io.parseFail", { source, error: (err as Error).message }), "warn");
         return;
       }
       host.set(result.config);
       ta.value = exportConfigJson(result.config);
       if (result.warnings.length === 0) {
-        say(`${source}成功`, "ok");
+        say(t("settings.io.ok", { source }), "ok");
       } else {
-        say(`${source}成功,但有 ${result.warnings.length} 处被修正:\n· ` + result.warnings.join("\n· "), "warn");
+        say(
+          t("settings.io.okWarn", { source, n: result.warnings.length }) +
+            "\n· " +
+            result.warnings.join("\n· "),
+          "warn",
+        );
       }
     };
 
-    const applyBtn = el("button", undefined, "应用上面的 JSON");
-    applyBtn.addEventListener("click", () => apply(ta.value, "导入"));
+    const applyBtn = el("button", undefined, t("settings.io.apply"));
+    applyBtn.addEventListener("click", () => apply(ta.value, t("settings.io.srcImport")));
 
-    const download = el("button", undefined, "导出为文件");
+    const download = el("button", undefined, t("settings.io.download"));
     download.addEventListener("click", () => {
       const blob = new Blob([exportConfigJson(host.get())], { type: "application/json" });
       const a = el("a");
@@ -389,30 +420,25 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     file.addEventListener("change", async () => {
       const f = file.files?.[0];
       if (!f) return;
-      apply(await f.text(), "从文件导入");
+      apply(await f.text(), t("settings.io.srcFile"));
       file.value = "";
     });
-    const upload = el("button", undefined, "从文件导入");
+    const upload = el("button", undefined, t("settings.io.upload"));
     upload.addEventListener("click", () => file.click());
 
-    const reset = el("button", "danger", "恢复全部默认");
+    const reset = el("button", "danger", t("settings.io.reset"));
     reset.addEventListener("click", () => {
-      if (!confirm("把主题、字体、终端设置全部恢复为默认?")) return;
+      if (!confirm(t("settings.io.resetConfirm"))) return;
       // 和首次打开走同一条路:重新读一次系统亮暗,而不是钉死深色
       host.set(systemDefaultConfig());
       ta.value = exportConfigJson(host.get());
-      say(`已恢复默认(主题跟随系统:${host.get().theme.name})`, "ok");
+      say(t("settings.io.resetDone", { name: host.get().theme.name }), "ok");
     });
 
     const bar = el("div", "set-bar");
     bar.append(applyBtn, download, upload, reset, file);
     wrap.append(
-      el(
-        "div",
-        "set-note",
-        "配置就是下面这段 JSON,可以直接改。theme.colors 是 xterm.js 的 ITheme," +
-          "所以任何 iTerm2 / Windows Terminal 配色都能手工贴进来。",
-      ),
+      el("div", "set-note", t("settings.io.note")),
       ta,
       bar,
       status,
@@ -421,6 +447,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
   }
 
   function render() {
+    title.textContent = t("app.settings");
+    closeBtn.title = t("settings.close");
     renderTabs();
     const pane =
       tab === "theme" ? renderTheme()
@@ -442,6 +470,11 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       ev.stopPropagation();
       close();
     }
+  });
+
+  // 语言是在这个面板里改的,所以改完必须原地重绘一次,不然用户看着的还是旧文案。
+  subscribe(() => {
+    if (!overlay.hidden) render();
   });
 
   return {

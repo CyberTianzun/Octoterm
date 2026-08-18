@@ -13,6 +13,7 @@ import { resolveTheme } from "./theme-catalog";
 import { applyUiColors } from "./appearance";
 import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
+import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
 
 const $ = (id: string) => document.getElementById(id)!;
@@ -27,11 +28,14 @@ let webgl: WebglAddon | null = null;
 const previews = new Map<number, Terminal>();
 
 let config: OctoConfig = loadConfig(resolveTheme);
+// 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
+// 求值时就会铺一批静态文案,那时 t() 必须已经指向对的词条表。
+applyLocale();
 
 function token(): string {
   const fromHash = new URLSearchParams(location.hash.slice(1)).get("token");
   if (fromHash) localStorage.setItem("octoterm-token", fromHash);
-  return localStorage.getItem("octoterm-token") ?? prompt("octoterm token:") ?? "";
+  return localStorage.getItem("octoterm-token") ?? prompt(t("app.tokenPrompt")) ?? "";
 }
 
 function wsUrl(): string {
@@ -40,8 +44,55 @@ function wsUrl(): string {
 }
 
 function fmtTime(unixSecs: number): string {
-  return new Date(unixSecs * 1000).toLocaleString();
+  // 跟界面语言走,而不是跟浏览器区域走:界面切成 English 之后还蹦出中文日期很怪
+  return new Date(unixSecs * 1000).toLocaleString(localeTag());
 }
+
+/* ---------- 多语言 ---------- */
+
+/**
+ * 把配置里的语言偏好落到 i18n 上。"auto" 时按浏览器语言挑,所以每次配置变更
+ * 都要重算——用户可能刚把「跟随浏览器」改成了固定语言。
+ */
+function applyLocale() {
+  setLocale(resolveLocale(config.ui.locale, navigatorLanguages()));
+}
+
+/** index.html 里带 data-i18n / data-i18n-title 的静态文案。 */
+function applyStaticText() {
+  document.documentElement.lang = localeTag();
+  for (const node of Array.from(document.querySelectorAll<HTMLElement>("[data-i18n]"))) {
+    node.textContent = t(node.dataset.i18n as MsgKey);
+  }
+  for (const node of Array.from(document.querySelectorAll<HTMLElement>("[data-i18n-title]"))) {
+    node.title = t(node.dataset.i18nTitle as MsgKey);
+  }
+}
+
+/** 连接状态。存的是词条 key 而不是算好的字符串,这样切语言能原地重绘。 */
+let connKey: MsgKey = "conn.connected";
+function setConn(key: MsgKey) {
+  connKey = key;
+  $("conn-state").textContent = t(key);
+}
+
+/** 重连横幅。同上,存的是「怎么算出文案」——fatal 那条还带着服务端的原文参数。 */
+let banner: (() => string) | null = null;
+function setBanner(render: (() => string) | null) {
+  banner = render;
+  const el = $("reconnect-banner");
+  el.hidden = render === null;
+  if (render) el.textContent = render();
+}
+
+// 切语言:静态文案、侧边栏(会话时间也跟着换格式)、状态与横幅一起重绘。
+// 设置面板和新建会话菜单各自订阅了自己的那部分。
+subscribe(() => {
+  applyStaticText();
+  renderSidebar();
+  setConn(connKey);
+  setBanner(banner);
+});
 
 /* ---------- 外观配置 ---------- */
 
@@ -50,6 +101,8 @@ function applyConfig(next: OctoConfig) {
   const previewToggled = next.ui.sidebarPreview !== config.ui.sidebarPreview;
   config = next;
   saveConfig(config);
+  // 语言真变了才会通知订阅者(setLocale 对同值是空操作),所以不必自己比一遍
+  applyLocale();
   applyUiColors(config);
   if (term) {
     term.options = toTerminalOptions(config);
@@ -66,7 +119,7 @@ function applyConfig(next: OctoConfig) {
 
 /** WebGL 渲染器。装载失败(没有 WebGL2 / 上下文丢失)静默回落到 DOM 渲染器 ——
  *  渲染器只影响性能,不该因为它连终端都开不出来。 */
-function applyRenderer(t: Terminal) {
+function applyRenderer(terminal: Terminal) {
   if (!config.ui.webgl) {
     disposeWebgl();
     return;
@@ -79,7 +132,7 @@ function applyRenderer(t: Terminal) {
       if (webgl === addon) disposeWebgl();
       else addon.dispose();
     });
-    t.loadAddon(addon);
+    terminal.loadAddon(addon);
     webgl = addon;
   } catch (err) {
     console.warn("octoterm: WebGL 渲染器不可用,使用 DOM 渲染器", err);
@@ -96,10 +149,10 @@ const settings = mountSettings({
 function renderSidebar() {
   const nav = $("session-nav");
   nav.innerHTML = "";
-  previews.forEach((t) => t.dispose());
+  previews.forEach((p) => p.dispose());
   previews.clear();
   if (sessions.length === 0) {
-    nav.innerHTML = `<div class="empty">还没有会话,点右上角 + 新建</div>`;
+    nav.innerHTML = `<div class="empty">${t("session.empty")}</div>`;
     return;
   }
   for (const s of sessions) {
@@ -110,8 +163,8 @@ function renderSidebar() {
       <div class="smeta"></div>
       <div class="preview"></div>
       <div class="sacts">
-        <button data-act="rename" title="改名">✎</button>
-        <button data-act="kill" title="结束会话">✕</button>
+        <button data-act="rename" title="${t("session.rename")}">✎</button>
+        <button data-act="kill" title="${t("session.kill")}">✕</button>
       </div>`;
     row.querySelector(".sname")!.textContent = s.name;
     row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
@@ -136,7 +189,7 @@ function renderSidebar() {
       }
       if (act === "rename") {
         ev.stopPropagation();
-        const name = prompt("New name:", s.name);
+        const name = prompt(t("session.renamePrompt"), s.name);
         if (name) client.send({ type: "rename-session", id: s.id, name });
         return;
       }
@@ -266,19 +319,17 @@ mountNewSessionMenu($("new-session"), {
 });
 
 client.onOpen = () => {
-  $("reconnect-banner").hidden = true;
-  $("conn-state").textContent = "已连接";
+  setBanner(null);
+  setConn("conn.connected");
   client.send({ type: "list-sessions" });
 };
 client.onReconnecting = () => {
-  $("reconnect-banner").textContent = "reconnecting…";
-  $("reconnect-banner").hidden = false;
-  $("conn-state").textContent = "重连中";
+  setBanner(() => t("conn.banner.reconnecting"));
+  setConn("conn.reconnecting");
 };
 client.onFatal = (message) => {
-  $("reconnect-banner").textContent = `连接失败: ${message} — 刷新页面重新输入 token`;
-  $("reconnect-banner").hidden = false;
-  $("conn-state").textContent = "已断开";
+  setBanner(() => t("conn.banner.fatal", { message }));
+  setConn("conn.disconnected");
 };
 client.onChannelData = (channel, payload) => {
   if (channel === TERM_CHANNEL && term) {
@@ -324,8 +375,11 @@ client.onControl = (msg) => {
   }
 };
 
-// 界面配色先于连接落地:否则首帧会闪一下 style.css 里那套写死的默认色
+// 界面配色和文案先于连接落地:否则首帧会闪一下 style.css 里那套写死的默认色,
+// 以及 index.html 里那些还空着的 data-i18n 节点
 applyUiColors(config);
+applyStaticText();
+setConn(connKey);
 // 只取一次:token() 在 localStorage 里没有时会 prompt,取两次就要问两遍
 const authToken = token();
 client.connect(wsUrl(), authToken);

@@ -14,6 +14,7 @@
  */
 import type { ITheme, ITerminalOptions, FontWeight } from "@xterm/xterm";
 import { BUILTIN_THEMES, DEFAULT_THEMES } from "./themes/builtin";
+import { LOCALES, type LocalePref, t } from "./i18n";
 
 export const CONFIG_VERSION = 1;
 export const STORAGE_KEY = "octoterm-config";
@@ -44,6 +45,8 @@ export interface OctoConfig {
     drawBoldTextInBrightColors: boolean;
   };
   ui: {
+    /** 界面语言。"auto" = 跟随浏览器,见 i18n.resolveLocale。 */
+    locale: LocalePref;
     /** 用主题色驱动整个界面(侧边栏等)的 CSS 变量,而不是只染终端那块。 */
     followThemeColors: boolean;
     /** 侧边栏里的小终端预览。关掉能省掉每个会话一个 Terminal 实例。 */
@@ -101,7 +104,7 @@ export function defaultConfig(prefersDark = true): OctoConfig {
       minimumContrastRatio: 1,
       drawBoldTextInBrightColors: true,
     },
-    ui: { followThemeColors: true, sidebarPreview: true, webgl: true },
+    ui: { locale: "auto", followThemeColors: true, sidebarPreview: true, webgl: true },
   };
 }
 
@@ -115,11 +118,11 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function num(v: unknown, lo: number, hi: number, fallback: number, path: string, warn: Warn): number {
   if (typeof v !== "number" || !Number.isFinite(v)) {
-    if (v !== undefined) warn(`${path}: 不是数字,用默认值 ${fallback}`);
+    if (v !== undefined) warn(t("config.warn.notNumber", { path, fallback }));
     return fallback;
   }
   const clamped = Math.min(hi, Math.max(lo, v));
-  if (clamped !== v) warn(`${path}: ${v} 超出 [${lo}, ${hi}],已收敛到 ${clamped}`);
+  if (clamped !== v) warn(t("config.warn.outOfRange", { path, value: v, lo, hi, clamped }));
   return clamped;
 }
 
@@ -129,20 +132,20 @@ function int(v: unknown, lo: number, hi: number, fallback: number, path: string,
 
 function bool(v: unknown, fallback: boolean, path: string, warn: Warn): boolean {
   if (typeof v === "boolean") return v;
-  if (v !== undefined) warn(`${path}: 不是布尔值,用默认值 ${fallback}`);
+  if (v !== undefined) warn(t("config.warn.notBool", { path, fallback: String(fallback) }));
   return fallback;
 }
 
 function pick<T extends string>(v: unknown, allowed: readonly T[], fallback: T, path: string, warn: Warn): T {
   if (typeof v === "string" && (allowed as readonly string[]).includes(v)) return v as T;
-  if (v !== undefined) warn(`${path}: 不是 ${allowed.join("/")} 之一,用默认值 ${fallback}`);
+  if (v !== undefined) warn(t("config.warn.notInSet", { path, allowed: allowed.join("/"), fallback }));
   return fallback;
 }
 
 function fontWeight(v: unknown, fallback: FontWeight, path: string, warn: Warn): FontWeight {
   if (typeof v === "number" && Number.isFinite(v)) return Math.min(900, Math.max(1, Math.round(v)));
   if (typeof v === "string" && FONT_WEIGHTS.includes(v)) return v as FontWeight;
-  if (v !== undefined) warn(`${path}: 不是合法字重,用默认值 ${fallback}`);
+  if (v !== undefined) warn(t("config.warn.badWeight", { path, fallback }));
   return fallback;
 }
 
@@ -150,17 +153,17 @@ function fontWeight(v: unknown, fallback: FontWeight, path: string, warn: Warn):
  *  挡掉 `;{}()` 等能撑破声明的字符。截断到 200 字符防止病态输入。 */
 export function sanitizeFontFamily(v: unknown, fallback: string, warn: Warn): string {
   if (typeof v !== "string") {
-    if (v !== undefined) warn("font.family: 不是字符串,用默认字体栈");
+    if (v !== undefined) warn(t("config.warn.familyNotString"));
     return fallback;
   }
   const cleaned = v.replace(/[^A-Za-z0-9 ,._'"-]/g, "").trim().slice(0, 200);
-  if (cleaned !== v.trim()) warn("font.family: 含非法字符,已剔除");
+  if (cleaned !== v.trim()) warn(t("config.warn.familyIllegal"));
   return cleaned === "" ? fallback : cleaned;
 }
 
 function color(v: unknown, path: string, warn: Warn): string | undefined {
   if (typeof v === "string" && COLOR_RE.test(v)) return v;
-  if (v !== undefined) warn(`${path}: 不是 #rgb/#rrggbb 形式的颜色,已忽略`);
+  if (v !== undefined) warn(t("config.warn.badColor", { path }));
   return undefined;
 }
 
@@ -195,10 +198,10 @@ export function sanitizeConfig(
   const resolve = opts.resolveTheme ?? ((n: string) => BUILTIN_THEMES[n]);
   const d = defaultConfig();
   const src = isObj(input) ? input : {};
-  if (!isObj(input)) warn("配置不是一个 JSON 对象,已全部使用默认值");
+  if (!isObj(input)) warn(t("config.warn.notObject"));
 
   if (typeof src.version === "number" && src.version > CONFIG_VERSION) {
-    warn(`配置来自更新的版本(v${src.version} > v${CONFIG_VERSION}),不认得的字段会被忽略`);
+    warn(t("config.warn.newerVersion", { version: src.version, current: CONFIG_VERSION }));
   }
 
   const themeSrc = isObj(src.theme) ? src.theme : {};
@@ -215,7 +218,7 @@ export function sanitizeConfig(
     if (found) {
       colors = sanitizeTheme(found, warn);
     } else {
-      warn(`theme: 目录里没有「${name}」且未内联颜色,退回 ${d.theme.name}`);
+      warn(t("config.warn.themeUnknown", { name, fallback: d.theme.name }));
       return { ...d, ...sanitizeRest(src, d, warn) };
     }
   }
@@ -250,6 +253,7 @@ function sanitizeRest(
       drawBoldTextInBrightColors: bool(t.drawBoldTextInBrightColors, d.terminal.drawBoldTextInBrightColors, "terminal.drawBoldTextInBrightColors", warn),
     },
     ui: {
+      locale: pick(u.locale, ["auto", ...LOCALES] as const, d.ui.locale, "ui.locale", warn),
       followThemeColors: bool(u.followThemeColors, d.ui.followThemeColors, "ui.followThemeColors", warn),
       sidebarPreview: bool(u.sidebarPreview, d.ui.sidebarPreview, "ui.sidebarPreview", warn),
       webgl: bool(u.webgl, d.ui.webgl, "ui.webgl", warn),

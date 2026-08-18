@@ -9,7 +9,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 execSync("npx esbuild src/launchers.ts --bundle --format=esm --outfile=test/.launchers.build.mjs", {
   cwd: join(here, ".."),
 });
-const { fetchLaunchers, DEFAULT_LAUNCHER, providerLabel } = await import("./.launchers.build.mjs");
+const { fetchLaunchers, defaultLauncher, providerLabel } = await import("./.launchers.build.mjs");
 
 /** 替掉 globalThis.fetch,返回被记录下来的请求。 */
 function stubFetch(handler) {
@@ -59,23 +59,23 @@ test("token 走 Authorization 头,不进 URL", async () => {
 // 都必须退化成一条兜底项,而不是空菜单或异常。
 test("HTTP 失败退化成兜底项", async () => {
   stubFetch(() => ({ ok: false, status: 500, json: async () => ({}) }));
-  assert.deepEqual(await fetchLaunchers("tok"), [DEFAULT_LAUNCHER]);
+  assert.deepEqual(await fetchLaunchers("tok"), [defaultLauncher()]);
 });
 
 test("网络异常退化成兜底项", async () => {
   stubFetch(() => {
     throw new Error("offline");
   });
-  assert.deepEqual(await fetchLaunchers("tok"), [DEFAULT_LAUNCHER]);
+  assert.deepEqual(await fetchLaunchers("tok"), [defaultLauncher()]);
 });
 
 test("空列表退化成兜底项", async () => {
   stubFetch(ok({ launchers: [] }));
-  assert.deepEqual(await fetchLaunchers("tok"), [DEFAULT_LAUNCHER]);
+  assert.deepEqual(await fetchLaunchers("tok"), [defaultLauncher()]);
 });
 
 test("兜底项的 command 为空,表示交给服务端决定", () => {
-  assert.deepEqual(DEFAULT_LAUNCHER.command, []);
+  assert.deepEqual(defaultLauncher().command, []);
 });
 
 test("结构不完整的条目被丢掉,不污染菜单", async () => {
@@ -100,12 +100,12 @@ test("结构不完整的条目被丢掉,不污染菜单", async () => {
 
 test("launchers 不是数组时退化成兜底项", async () => {
   stubFetch(ok({ launchers: "nope" }));
-  assert.deepEqual(await fetchLaunchers("tok"), [DEFAULT_LAUNCHER]);
+  assert.deepEqual(await fetchLaunchers("tok"), [defaultLauncher()]);
   stubFetch(ok({}));
-  assert.deepEqual(await fetchLaunchers("tok"), [DEFAULT_LAUNCHER]);
+  assert.deepEqual(await fetchLaunchers("tok"), [defaultLauncher()]);
 });
 
-test("provider 显示名有中文标签,未知的原样显示", () => {
+test("品牌名不翻译,未知 provider 原样显示", () => {
   assert.equal(providerLabel("iterm2"), "iTerm2");
   assert.equal(providerLabel("windows-terminal"), "Windows Terminal");
   assert.equal(providerLabel("某个插件"), "某个插件");

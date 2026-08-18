@@ -10,6 +10,7 @@
  * 的配置文件,拼字符串就是一个 XSS 口子(和 settings.ts 同样的理由)。
  */
 import { type Launcher, providerLabel } from "./launchers";
+import { subscribe, t } from "./i18n";
 
 export interface NewSessionHost {
   /** 拉取启动项。每次打开都会调 —— 用户可能刚在 iTerm2 里加了个 profile。 */
@@ -38,8 +39,6 @@ export function mountNewSessionMenu(
 
   const filter = el("input", "ns-filter");
   filter.type = "search";
-  filter.placeholder = "筛选…";
-  filter.setAttribute("aria-label", "筛选启动项");
 
   const list = el("div", "ns-list");
   menu.append(filter, list);
@@ -62,14 +61,14 @@ export function mountNewSessionMenu(
   function render(all: Launcher[] | null) {
     list.replaceChildren();
     if (all === null) {
-      list.appendChild(el("div", "ns-note", "载入中…"));
+      list.appendChild(el("div", "ns-note", t("ns.loading")));
       shown = [];
       return;
     }
     const q = filter.value.trim().toLowerCase();
     shown = all.filter((l) => matches(l, q));
     if (shown.length === 0) {
-      list.appendChild(el("div", "ns-note", "没有匹配的启动项"));
+      list.appendChild(el("div", "ns-note", t("ns.noMatch")));
       return;
     }
     if (selected >= shown.length) selected = shown.length - 1;
@@ -191,14 +190,28 @@ export function mountNewSessionMenu(
   // click 要等按键抬起,中间那段时间菜单还开着,看起来像没反应。
   document.addEventListener("pointerdown", (ev) => {
     if (!open) return;
-    const t = ev.target as Node;
-    if (!menu.contains(t) && !anchor.contains(t)) close();
+    const target = ev.target as Node;
+    if (!menu.contains(target) && !anchor.contains(target)) close();
   });
   // 这里**故意不监听 focusout**:点条目时 pointerdown 会先把焦点从筛选框挪走,
   // 若借 focusout 关菜单,条目会在 click 派发之前被 hidden 掉,点了没反应 ——
   // 正是要修的那个毛病。取消靠上面的外部 pointerdown 和 Escape 就够了。
   // 视口一变,之前算好的位置就不对了;重新定位比让菜单飘到别处强
   window.addEventListener("resize", () => open && place());
+
+  /** 语言相关的静态文案。挂载时先跑一次,之后每次切语言再跑。 */
+  function applyStaticText() {
+    filter.placeholder = t("ns.filter");
+    filter.setAttribute("aria-label", t("ns.filterAria"));
+  }
+  applyStaticText();
+  // 切语言时连分组名(providerLabel)一起变,所以展开着的列表要重绘。
+  // 缓存里的兜底项文案也过期了,一并丢掉,下次打开重新拉。
+  subscribe(() => {
+    applyStaticText();
+    if (cached?.some((l) => l.id === "fallback:default")) cached = null;
+    if (open) render(cached);
+  });
 
   anchor.addEventListener("click", openMenu);
 

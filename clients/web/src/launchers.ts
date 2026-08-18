@@ -8,6 +8,7 @@
  * 走 HTTP 而不是控制通道:这是一份与会话无关的清单,页面加载时就要用,那时
  * WebSocket 可能还没握手完。
  */
+import { t } from "./i18n";
 
 export interface Launcher {
   id: string;
@@ -24,25 +25,35 @@ export interface Launcher {
  * 兜底项。列表拉不到(服务端旧版本、端点报错、断网)时菜单里至少有它 ——
  * 「新建会话」是这个工具最基本的动作,不能因为一份第三方配置读不了就用不了。
  * `command: []` 让 new-session 发 `command: null`,由服务端决定跑什么。
+ *
+ * 是函数而不是常量:文案跟着界面语言走,而语言可以在运行期改。菜单每次打开
+ * 都重新拉一次列表,所以现取现算就够了。
  */
-export const DEFAULT_LAUNCHER: Launcher = {
-  id: "fallback:default",
-  provider: "builtin",
-  name: "默认 shell",
-  detail: "由服务端决定",
-  command: [],
-  cwd: null,
-};
+export function defaultLauncher(): Launcher {
+  return {
+    id: "fallback:default",
+    provider: "builtin",
+    name: t("launcher.defaultName"),
+    detail: t("launcher.defaultDetail"),
+    command: [],
+    cwd: null,
+  };
+}
 
-const PROVIDER_LABELS: Record<string, string> = {
-  builtin: "内置",
-  config: "自定义 (config.toml)",
-  iterm2: "iTerm2",
-  "windows-terminal": "Windows Terminal",
-};
-
+/** 品牌名(iTerm2 / Windows Terminal)不翻译:它们是产品名,翻了反而认不出。 */
 export function providerLabel(provider: string): string {
-  return PROVIDER_LABELS[provider] ?? provider;
+  switch (provider) {
+    case "builtin":
+      return t("launcher.provider.builtin");
+    case "config":
+      return t("launcher.provider.config");
+    case "iterm2":
+      return "iTerm2";
+    case "windows-terminal":
+      return "Windows Terminal";
+    default:
+      return provider;
+  }
 }
 
 /** 只保留结构完整的条目:服务端是可以被换掉的,别信它一定给对。 */
@@ -79,13 +90,13 @@ export async function fetchLaunchers(token: string): Promise<Launcher[]> {
     });
     if (!res.ok) {
       console.warn("octoterm: 启动项列表返回", res.status);
-      return [DEFAULT_LAUNCHER];
+      return [defaultLauncher()];
     }
     const body = (await res.json()) as { launchers?: unknown };
     const list = sanitize(body?.launchers);
-    return list.length > 0 ? list : [DEFAULT_LAUNCHER];
+    return list.length > 0 ? list : [defaultLauncher()];
   } catch (err) {
     console.warn("octoterm: 启动项列表拉取失败", err);
-    return [DEFAULT_LAUNCHER];
+    return [defaultLauncher()];
   }
 }

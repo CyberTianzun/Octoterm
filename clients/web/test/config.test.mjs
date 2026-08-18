@@ -210,7 +210,8 @@ test("来自更高版本的配置能读,只是提示有字段被忽略", () => {
   assert.equal(c.version, CONFIG_VERSION);
   assert.equal(c.font.size, 18);
   assert.equal("futureKnob" in c, false);
-  assert.ok(w.warnings.some((m) => m.includes("更新的版本")));
+  // 断言版本号而不是措辞:警告文案会跟着界面语言走(见 src/i18n.ts)
+  assert.ok(w.warnings.some((m) => m.includes(`v${CONFIG_VERSION + 7}`)));
 });
 
 test("坏 JSON 抛异常,坏字段不抛", () => {
