@@ -1,3 +1,4 @@
+pub mod autostart;
 pub mod configfile;
 pub mod logs;
 pub mod settings;
