@@ -40,13 +40,13 @@ impl LauncherProvider for ITerm2 {
         let default = builtin::default_command();
         let mut raws = Vec::new();
 
-        if let Some(path) = prefs_path(home.as_deref()) {
-            if path.is_file() {
-                tracing::debug!(path = %path.display(), "读取 iTerm2 配置");
-                let value = plist::Value::from_file(&path)
-                    .with_context(|| format!("解析 {} 失败", path.display()))?;
-                raws.extend(from_prefs_plist(&value));
-            }
+        if let Some(path) = prefs_path(home.as_deref())
+            && path.is_file()
+        {
+            tracing::debug!(path = %path.display(), "读取 iTerm2 配置");
+            let value = plist::Value::from_file(&path)
+                .with_context(|| format!("解析 {} 失败", path.display()))?;
+            raws.extend(from_prefs_plist(&value));
         }
         for path in dynamic_profile_files(home.as_deref()) {
             match std::fs::read_to_string(&path) {

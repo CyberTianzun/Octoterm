@@ -363,10 +363,10 @@ async fn pump_output(
                 {
                     return;
                 }
-                if let Some(size) = resized {
-                    if !send_resized(&out, channel, size).await {
-                        return;
-                    }
+                if let Some(size) = resized
+                    && !send_resized(&out, channel, size).await
+                {
+                    return;
                 }
                 if exited {
                     let _ = out

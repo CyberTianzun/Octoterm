@@ -378,10 +378,10 @@ fn emit(
     if merged.hidden.unwrap_or(false) {
         return None;
     }
-    if let Some(src) = merged.source.as_deref() {
-        if disabled.contains(src) {
-            return None;
-        }
+    if let Some(src) = merged.source.as_deref()
+        && disabled.contains(src)
+    {
+        return None;
     }
     let name = merged.name.as_deref()?;
     let (command, detail) = if let Some(raw) = merged.commandline.as_deref() {

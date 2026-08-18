@@ -68,10 +68,10 @@ pub fn discover() -> Vec<Launcher> {
 ///
 /// 定义成"菜单第一条",而不是另写一份默认值:两份真相迟早会对不上。
 pub fn default_command() -> Vec<String> {
-    if let Some(first) = discover().into_iter().next() {
-        if !first.command.is_empty() {
-            return first.command;
-        }
+    if let Some(first) = discover().into_iter().next()
+        && !first.command.is_empty()
+    {
+        return first.command;
     }
     // discover 理论上不会空,但默认 shell 是不能失败的东西,兜一层
     #[cfg(unix)]

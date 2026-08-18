@@ -43,14 +43,13 @@ pub fn split_posix(s: &str) -> Vec<String> {
                         break;
                     }
                     // 双引号里只有这四个字符能被反斜杠转义,其余反斜杠是字面量
-                    if c == '\\' {
-                        if let Some(&n) = it.peek() {
-                            if matches!(n, '"' | '\\' | '$' | '`') {
-                                cur.push(n);
-                                it.next();
-                                continue;
-                            }
-                        }
+                    if c == '\\'
+                        && let Some(&n) = it.peek()
+                        && matches!(n, '"' | '\\' | '$' | '`')
+                    {
+                        cur.push(n);
+                        it.next();
+                        continue;
                     }
                     cur.push(c);
                 }
