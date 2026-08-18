@@ -318,6 +318,15 @@ impl App {
                             failures = self.tray_failures,
                             "托盘创建失败,放弃"
                         );
+                        // 收尾必须排在弹框之前:`fatal` 是阻塞模态,没人点就不返回,
+                        // 而它挂着的这段时间里 HTTP 层还在跑、会话一个没杀 —— 那正是
+                        // 这条分支要收口的状态。`exit()` 只是置标志位,回调返回后才
+                        // 生效,提前调语义不变。
+                        //
+                        // 和「退出」菜单走同一条收尾:先关 HTTP 层再杀会话。这里不问
+                        // 用户 —— 托盘都没起来,谈不上有会话在跑,也没地方让他确认。
+                        shutdown(&mut self.sup);
+                        event_loop.exit();
                         crate::dialog::fatal(
                             "octoterm 无法启动",
                             &format!(
@@ -327,10 +336,6 @@ impl App {
                                 self.tray_failures
                             ),
                         );
-                        // 和「退出」菜单走同一条收尾:先关 HTTP 层再杀会话。这里不问
-                        // 用户 —— 托盘都没起来,谈不上有会话在跑,也没地方让他确认。
-                        shutdown(&mut self.sup);
-                        event_loop.exit();
                     }
                 }
             }

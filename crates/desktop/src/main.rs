@@ -74,10 +74,14 @@ fn main() -> Result<()> {
         config.token.clone().filter(|t| !t.trim().is_empty()),
     );
 
-    let rt = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .context("无法创建 tokio runtime")?;
+    let rt = or_report(
+        FAILED_TO_START,
+        "无法创建 tokio runtime。",
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("无法创建 tokio runtime"),
+    )?;
 
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers);
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
@@ -107,7 +111,7 @@ fn main() -> Result<()> {
         builder.with_activate_ignoring_other_apps(false);
     }
     let event_loop =
-        or_report(FAILED_TO_START, "无法创建事件循环。", builder.build().map_err(Into::into))?;
+        or_report(FAILED_TO_START, "无法创建事件循环。", builder.build().context("无法创建事件循环"))?;
     let proxy = event_loop.create_proxy();
     // config 在 Supervisor::new 里只是被借用,这里把整份连同两条启动失败原因
     // 一起交给 App:配置做只读展示,错误做横幅 + 状态行。
