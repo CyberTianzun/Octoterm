@@ -28,7 +28,14 @@ pub fn default_path() -> Result<PathBuf> {
 
 /// 就地写回。文件不存在时连同父目录一起创建。
 pub fn save(path: &Path, edit: &Editable) -> Result<()> {
-    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    // 只有「文件不存在」才当空文档处理;权限不足、路径其实是目录等其他
+    // 读取失败一律向上传播 —— 否则会被 write_atomic 静默 rename 成空文件,
+    // 把用户手写的注释、[[launcher]] 段全部清掉。
+    let existing = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e).with_context(|| format!("无法读取 {}", path.display())),
+    };
     let mut doc: DocumentMut = existing
         .parse()
         .with_context(|| format!("{} 解析失败", path.display()))?;

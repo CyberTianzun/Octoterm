@@ -65,6 +65,36 @@ fn a_broken_file_is_reported_and_left_untouched() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), broken, "坏文件不该被改写");
 }
 
+/// 用 unix 权限位模拟「文件存在但读取失败」(权限不足、路径其实是目录等)。
+/// Windows 的 ACL 权限模型没有对应的 rwx 位可以直接 chmod 出同样的
+/// PermissionDenied,所以这个场景只在 unix 上覆盖。
+#[cfg(unix)]
+#[test]
+fn unreadable_file_is_reported_and_left_untouched() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let original = "# 我手写的注释,不许动\nlisten = \"127.0.0.1:7683\"\n";
+    std::fs::write(&path, original).unwrap();
+
+    // 去掉读权限、只留写权限:rename 只需要目录的写权限就能成功,
+    // 但 read_to_string 会失败 —— 这正是要抓的场景。
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o200)).unwrap();
+
+    let result = save(&path, &edit("127.0.0.1:9000", None));
+
+    // 无论上面断言是否通过,先把权限改回去,否则 tempdir 清理会失败。
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    assert!(result.is_err(), "读取失败应当报错,而不是被当成空文件处理");
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        original,
+        "读不出来的文件不该被静默清空"
+    );
+}
+
 #[test]
 fn no_temp_file_is_left_behind() {
     let dir = tempfile::tempdir().unwrap();
