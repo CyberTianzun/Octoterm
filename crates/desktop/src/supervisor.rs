@@ -110,6 +110,7 @@ impl Supervisor {
             manager: self.manager.clone(),
             token: token.clone(),
             launchers: self.launchers.clone(),
+            listen_port: actual.port(),
         };
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {

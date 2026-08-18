@@ -54,7 +54,7 @@ clients/web/src/agents.ts                agent 面板与回答 UI
   - `octoterm_server::agent::{AgentAdapter, Detected, Confidence, AgentStatus, registry}`
   - `GET /api/agents` → `{ "agents": [AgentStatus] }`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `crates/server/tests/agent_detect.rs` —— 检测必须是三元证据,且**不能被空目录骗过**:
 
@@ -98,7 +98,7 @@ fn 只有我方写入的配置不算用户装过() {
 
 第三个用例是 clawd 踩过的坑:它自己会创建 `~/.claude/`,导致「目录存在」变成自证。
 
-- [ ] **Step 2: 定义 trait 与共享类型**
+- [x] **Step 2: 定义 trait 与共享类型**
 
 `crates/server/src/agent/mod.rs`:
 
@@ -188,7 +188,7 @@ pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
 }
 ```
 
-- [ ] **Step 3: 实现检测**
+- [x] **Step 3: 实现检测**
 
 `agent/detect.rs` 按 spec 的三元证据表实现。要点:
 
@@ -199,11 +199,11 @@ pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
 
 **不执行 `claude --version`** —— 扫描是只读操作,不 spawn 进程。
 
-- [ ] **Step 4: 挂只读路由**
+- [x] **Step 4: 挂只读路由**
 
 `app.rs` 里加 `.route("/api/agents", get(crate::agent::routes::list))`,鉴权复用现成的 `bearer_ok`。扫描是阻塞 IO,**必须 `spawn_blocking`**,照抄 `launchers_handler` 的写法。
 
-- [ ] **Step 5: 验证**
+- [x] **Step 5: 验证**
 
 `cargo test -p octoterm-server --test agent_detect` 全绿;手工 `curl -H "Authorization: Bearer <token>" localhost:7683/api/agents` 能看到本机结果。
 
@@ -222,7 +222,7 @@ pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
 
 这一 task 是整个功能里**最需要测试密度**的地方:它是唯一会改用户文件的逻辑。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `crates/server/tests/agent_edit.rs`:
 
@@ -301,7 +301,7 @@ fn 长得像的一律不认领() {
 }
 ```
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 ```rust
 pub struct InstallCtx { pub home: PathBuf, pub port: u16 }
@@ -320,7 +320,7 @@ pub enum EditOp {
 
 **不引入 `url` crate**:手写解析,或用已有依赖。P1 的约束是不加依赖。
 
-- [ ] **Step 3: 写 Claude Code 的 hook 规格**
+- [x] **Step 3: 写 Claude Code 的 hook 规格**
 
 遥测类(`async: true`, `timeout: 5`):`SessionStart` `SessionEnd` `UserPromptSubmit` `PreToolUse` `PostToolUse` `Stop` `Notification`
 阻塞类(`timeout: 600`,不带 `async`):`PermissionRequest`
@@ -342,11 +342,52 @@ pub enum EditOp {
 
 > ⚠️ **待实测**:`async: true` 与 header 的环境变量插值是否共存良好,官方文档没写。实现这一步时先手工验证遥测类事件能带着 `Authorization` 头打进来;如果不行,遥测类去掉 `async` 改用 `timeout: 5`(server 是即答的,代价可接受)。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 `cargo test -p octoterm-server --test agent_edit` 全绿。幂等与「卸载后回到原样」两条是本 task 的验收线。
 
 ---
+
+
+---
+
+## 实施记录:Task 1 / Task 2(2026-08-19,已完成)
+
+21 个用例全绿(`agent_detect` 8 + `agent_edit` 13),`cargo clippy --workspace -- -D warnings`
+干净(CI 用的就是这条口径,不带 `--all-targets`)。手工验证:真实 `~/.claude` 上
+`GET /api/agents` 返回 `installed/high/config-file`,并正确报出本机 clawd-on-desk 的
+冲突 hook。
+
+**与计划的偏差**(都是实现时发现计划写得不对,不是妥协):
+
+1. **测试函数名用 ASCII**。计划里我写的是中文函数名,但仓库现有测试全是 ASCII 命名,
+   跟着仓库走,中文放文档注释。
+2. **`detect(&DetectEnv)` 而不是 `detect(&Path)`**。PATH 必须能注入 —— 否则单测会读到
+   开发机上真实存在的 `claude`,把「没装」的用例全部染成「装了」。这是写第一个用例时
+   立刻暴露的。
+3. **trait 里暂时没有 `parse` / `render`**。它们要到 Task 5/6 才有实现,现在放进去只能
+   写 `todo!()`。等用得上时再加,不留占位桩。
+4. **`Integration::Foreign` 换成 `AgentStatus.conflicts: Vec<String>`**。Claude Code 的
+   hooks 是**列表**,不存在「被别人占住的槽位」,`Foreign` 这个变体在这里根本无法产生。
+   但真正有意义的互操作问题是另一回事:同一事件上挂着**别人的阻塞式 hook**(本机装了
+   clawd 就会),这不该删也删不得,但必须报出来。改成一个人类可读的冲突列表。
+5. **`apply_to_json` 不需要端口**。删除时按「我方形状、**任意**端口」匹配 —— 用户改过
+   监听端口之后,旧端口的条目仍然是我们的垃圾,卸载必须能清掉。`is_ours` 才看端口,
+   那是为了把「装了却端口对不上」这种**没有任何外部症状**的失效状态报出来。
+6. **开了 `serde_json/preserve_order`**。计划说 P1 不加依赖 —— 这是既有依赖上的 feature,
+   `indexmap` 早已在依赖树里,不引入新的编译单元。理由:我们要重写**用户的**
+   `settings.json`,默认的 `BTreeMap` 会把人家的 `env` / `permissions` / `model` 按字典序
+   重排整个文件。已加回归测试 `preserves_user_key_order`。
+7. **`AppState` 多了 `listen_port`**。装 hook 要把端口写进 URL,判定 `StalePort` 也要它。
+   取自 `listener.local_addr()` 而不是配置值 —— 配 `:0` 时两者不同。三处构造点同步更新。
+
+**新增的测试资产**:`crates/server/tests/fixtures/claude-settings-with-other-vendor.json`
+—— 从本机真实配置脱敏而来(15 个事件、14 条 command hook + 1 条指向别家端口的阻塞式
+http hook,外加 env/permissions/model)。合成用例覆盖不到「多事件 × 多组 × 混合类型」
+同时出现时的组清理逻辑,而那正是最容易把别人的条目一起带走的地方。
+
+**留给后续 task 的已知缺口**:`$CLAUDE_CONFIG_DIR` 没处理(Claude Code 支持用它换掉
+`~/.claude`),代码里已标注。
 
 ### Task 3: 落盘执行与安装路由
 

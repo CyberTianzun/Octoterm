@@ -1,0 +1,228 @@
+//! Claude Code adapter。
+//!
+//! 装的全部是 `type: "http"` hook —— octoterm-server 自己就是那个 HTTP 端点,
+//! 不需要随包携带任何脚本或 node 运行时。这和「单静态二进制」的定位是一回事,
+//! 也是相对参考实现(必须打包 node + 一堆 hook js)的结构性优势。
+//!
+//! 鉴权与会话关联走同一个机制:hook 的 `headers` 支持 `$VAR` 插值,插值发生在
+//! hook 触发那一刻、取自 Claude 进程的环境,而那份环境是 octoterm spawn 这个会话
+//! 时给的。于是**环境变量就是能力本身** —— 在 octoterm 之外启动的 Claude 拿不到
+//! 这两个变量,hook 照样触发,但没有 `Authorization` 头,一律 401 拒收。
+
+use anyhow::Result;
+use serde_json::{json, Value};
+use std::path::PathBuf;
+
+use super::detect::{self, DetectEnv};
+use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
+use super::{AgentAdapter, Confidence, Detected, Integration};
+
+pub struct ClaudeCode;
+
+/// 遥测类:只用来推进会话状态,不参与决策。`async: true` + 短超时,绝不拖住 Claude。
+const TELEMETRY: &[&str] = &[
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "Stop",
+    "Notification",
+];
+
+/// 决策类:Claude 会阻塞在 socket 上等我们写响应,最长 `timeout` 秒。
+const BLOCKING: &[&str] = &["PermissionRequest"];
+
+const TELEMETRY_TIMEOUT_SECS: u64 = 5;
+/// 给人类反应时间。这个值同时是「一个挂起请求最长活多久」的上界。
+const BLOCKING_TIMEOUT_SECS: u64 = 600;
+
+fn settings_path(home: &std::path::Path) -> PathBuf {
+    // 已知缺口:Claude Code 支持用 $CLAUDE_CONFIG_DIR 换掉 ~/.claude。P1 不处理,
+    // 因为它会让「装到哪、卸哪个」多出一条要跟着环境变量走的路径。
+    home.join(".claude").join("settings.json")
+}
+
+fn hook_spec(port: u16, event: &str, blocking: bool) -> Value {
+    let url = format!("http://127.0.0.1:{port}/hook/claude-code/{}", slug_of_event(event));
+    let mut spec = json!({
+        "type": "http",
+        "url": url,
+        "headers": {
+            "Authorization": "Bearer $OCTOTERM_HOOK_TOKEN",
+            "X-Octoterm-Session": "$OCTOTERM_SESSION_ID",
+        },
+        "allowedEnvVars": ["OCTOTERM_HOOK_TOKEN", "OCTOTERM_SESSION_ID"],
+    });
+    let obj = spec.as_object_mut().expect("字面量就是对象");
+    if blocking {
+        obj.insert("timeout".into(), json!(BLOCKING_TIMEOUT_SECS));
+    } else {
+        obj.insert("timeout".into(), json!(TELEMETRY_TIMEOUT_SECS));
+        // 遥测的输出会被忽略,不该占住 Claude 的主循环
+        obj.insert("async".into(), json!(true));
+    }
+    spec
+}
+
+fn managed_events() -> impl Iterator<Item = (&'static str, bool)> {
+    TELEMETRY.iter().map(|e| (*e, false)).chain(BLOCKING.iter().map(|e| (*e, true)))
+}
+
+fn read_settings(path: &std::path::Path) -> Option<Value> {
+    let text = std::fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+impl AgentAdapter for ClaudeCode {
+    fn id(&self) -> &'static str {
+        "claude-code"
+    }
+
+    fn name(&self) -> &'static str {
+        "Claude Code"
+    }
+
+    fn detect(&self, env: &DetectEnv) -> Detected {
+        let dir = env.home.join(".claude");
+        let settings = settings_path(&env.home);
+
+        // 1. 配置文件里有非我方内容 —— 最硬的证据
+        if let Some(v) = read_settings(&settings)
+            && has_foreign_content(&v)
+        {
+            return Detected {
+                installed: true,
+                confidence: Confidence::High,
+                reason: "config-file",
+                detail: format!("{} 里有用户自己的配置", settings.display()),
+                config_path: Some(settings),
+            };
+        }
+
+        // 2. CLI 在 PATH 上。注意**不执行** `claude --version`:扫描是只读操作,
+        //    不 spawn 进程。
+        if let Some(exe) = detect::on_path(env, "claude") {
+            return Detected {
+                installed: true,
+                confidence: Confidence::High,
+                reason: "cli-path",
+                detail: format!("PATH 上找到 {}", exe.display()),
+                config_path: Some(settings),
+            };
+        }
+
+        // 3. 目录里有 settings.json 以外的东西 —— 用户跑过才会留下
+        if dir.is_dir() && detect::dir_has_entries_besides(&dir, &["settings.json"]) {
+            return Detected {
+                installed: true,
+                confidence: Confidence::Medium,
+                reason: "parent-dir",
+                detail: format!("{} 下有使用痕迹", dir.display()),
+                config_path: Some(settings),
+            };
+        }
+
+        Detected {
+            installed: false,
+            confidence: Confidence::Low,
+            reason: "not-found",
+            detail: "没有找到 Claude Code 的安装痕迹".into(),
+            config_path: None,
+        }
+    }
+
+    fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
+        let path = settings_path(&ctx.home);
+        Ok(managed_events()
+            .map(|(event, blocking)| ConfigEdit {
+                path: path.clone(),
+                op: EditOp::EnsureHook {
+                    event: event.to_string(),
+                    spec: hook_spec(ctx.port, event, blocking),
+                },
+            })
+            .collect())
+    }
+
+    fn plan_uninstall(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
+        let path = settings_path(&ctx.home);
+        Ok(managed_events()
+            .map(|(event, _)| ConfigEdit {
+                path: path.clone(),
+                op: EditOp::RemoveOurs { event: event.to_string() },
+            })
+            .collect())
+    }
+
+    fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {
+        let Some(doc) = read_settings(&settings_path(&ctx.home)) else {
+            return (Integration::NotInstalled, Vec::new());
+        };
+        let mut ours_here = 0usize;
+        let mut ours_elsewhere = 0usize;
+        let mut conflicts = Vec::new();
+
+        for (event, blocking) in managed_events() {
+            for hook in hooks_of(&doc, event) {
+                if is_ours(hook, ctx.port) {
+                    ours_here += 1;
+                } else if is_our_shape(hook) {
+                    ours_elsewhere += 1;
+                } else if blocking && hook.get("type").and_then(Value::as_str) == Some("http") {
+                    // 别人的阻塞式 hook 挂在同一个事件上。不动它,但要报出来。
+                    let url = hook.get("url").and_then(Value::as_str).unwrap_or("<无 url>");
+                    conflicts.push(format!("{event} 上已有另一个阻塞式 hook:{url}"));
+                }
+            }
+        }
+
+        let state = if ours_here > 0 {
+            Integration::Installed
+        } else if ours_elsewhere > 0 {
+            Integration::StalePort
+        } else {
+            Integration::NotInstalled
+        };
+        (state, conflicts)
+    }
+}
+
+/// 我方形状但端口对不上 —— 用来识别「改过监听端口之后的残留」。
+fn is_our_shape(hook: &Value) -> bool {
+    hook.get("type").and_then(Value::as_str) == Some("http")
+        && hook
+            .get("url")
+            .and_then(Value::as_str)
+            .is_some_and(|u| u.starts_with("http://127.0.0.1:") && u.contains("/hook/claude-code/"))
+}
+
+fn hooks_of<'a>(doc: &'a Value, event: &str) -> impl Iterator<Item = &'a Value> {
+    doc.get("hooks")
+        .and_then(|h| h.get(event))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|g| g.get("hooks"))
+        .filter_map(Value::as_array)
+        .flatten()
+}
+
+/// 配置里有没有「不是我们写的」内容。只有我方 hook 的文件证明不了 Claude Code 存在。
+fn has_foreign_content(doc: &Value) -> bool {
+    let Some(obj) = doc.as_object() else { return false };
+    if obj.keys().any(|k| k != "hooks") {
+        return true;
+    }
+    let Some(hooks) = obj.get("hooks").and_then(Value::as_object) else { return false };
+    hooks.values().any(|groups| {
+        groups
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|g| g.get("hooks"))
+            .filter_map(Value::as_array)
+            .flatten()
+            .any(|h| !is_our_shape(h))
+    })
+}

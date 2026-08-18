@@ -20,12 +20,16 @@ pub struct AppState {
     pub token: String,
     /// 新建会话菜单的来源。进程启动时装配一次,每次请求重新扫描(见 launcher 模块)。
     pub launchers: Arc<Vec<Box<dyn LauncherProvider>>>,
+    /// 实际监听的端口。装 hook 时要把它写进 URL,判定「装了却端口对不上」也要它。
+    /// 取的是 listener 的 `local_addr()` 而不是配置值 —— 配 `:0` 时两者不同。
+    pub listen_port: u16,
 }
 
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/ws", any(ws_handler))
         .route("/api/launchers", get(launchers_handler))
+        .route("/api/agents", get(crate::agent::routes::list))
         .fallback(crate::assets::static_handler)
         .with_state(state)
 }
@@ -54,7 +58,7 @@ async fn launchers_handler(State(state): State<AppState>, headers: HeaderMap) ->
     }
 }
 
-fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
+pub(crate) fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
     headers
         .get(header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
