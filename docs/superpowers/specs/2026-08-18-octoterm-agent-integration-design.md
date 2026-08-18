@@ -290,11 +290,23 @@ Claude Code 的 `type:http` hook 支持 `headers` 与 `allowedEnvVars`(已核实
 那个 HTTP 端点。这是相对 clawd(必须随包带 node 运行时 + 一堆 hook js)的第二个
 结构性优势,也和「单静态二进制」的定位一致。
 
-### hook 密钥必须独立于 WS token,且持久化
+### hook 密钥不写进配置文件,因此也不需要持久化
 
-WS token 默认每次启动随机生成(Jupyter 式)。把它写进 `settings.json` 的话,server
-一重启,已写入的 hook 就全部失效。因此 hook 密钥单独生成、持久化在 octoterm 自己的
-状态文件里,与 WS token 无关。
+WS token 默认每次启动随机生成(Jupyter 式),把它写进 `settings.json` 的话 server
+一重启已装的 hook 就全失效。但**密钥根本不需要出现在 settings.json 里** —— 写进去的
+是字面量 `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,取自 Claude 进程的
+环境,而那份环境是 octoterm 在 spawn 这个会话时给的。
+
+于是密钥只需**每个 server 进程启动时随机生成一次、进程内不变**,不落盘、不新增
+状态文件、不触碰「server 不写文件」这条约束的更多部分。会话与 server 进程同生共死,
+不存在「老会话拿着旧密钥」的窗口。
+
+这带来一个恰好正确的副作用:**环境变量就是能力本身**。用户在 octoterm 之外自己开的
+Claude 拿不到这两个变量,hook 照样会触发,但请求没有 `Authorization` 头 → 401 拒收。
+「只管托管会话」这条范围边界因此不需要额外的判别逻辑,它由机制本身保证。
+
+代价:改监听端口后,已写入的 URL 会指向旧端口 → 连接失败 → 按实测是 non-blocking,
+不影响 Claude 可用,但远程接管会静默失效。自检接口必须报出端口不匹配。
 
 ### 边界
 
