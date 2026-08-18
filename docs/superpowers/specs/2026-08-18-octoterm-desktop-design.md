@@ -72,8 +72,12 @@ CLI 二进制 `octoterm-server` 继续独立存在,不受影响。
 pty 会话全在 `Arc<SessionManager>` 里。因此改配置的正确做法不是重启进程,而是:
 
 ```
-graceful shutdown 旧的 axum → 用新 listener + 新 AppState 再 spawn 一个
+停掉旧的 axum → 用新 listener + 新 AppState 再 spawn 一个
 ```
+
+**不能用 axum 的 graceful shutdown**:它会等所有连接结束,而 WebSocket 是长连接,
+永远不结束 —— graceful 在这里等于挂死。正确做法是 abort 掉那个 task、连同 listener
+一起 drop。客户端本来就是为断线设计的(seamless resume),abort 就是这里的正确语义。
 
 `SessionManager` 原地不动,**所有 pty 会话零损失**,客户端 WebSocket 断一下、按
 既有的 seamless resume 自己接回来 —— 正是本项目本来就擅长的事。
@@ -116,8 +120,14 @@ crates/desktop/assets/icon.png   托盘图标,include_bytes! 嵌入
 边界的含义:`settings/state.rs` 与 `configfile.rs` 不知道 egui 存在,
 `supervisor.rs` 不知道 winit 存在。这三个是全部的可测逻辑,UI 层薄到不值得测。
 
-依赖:`octoterm-server`、`winit`、`egui` + `egui-winit` + `egui_glow`、`tray-icon`、
-`muda`、`toml_edit`、`tokio`、`anyhow`、`tracing`、`tracing-subscriber`、`directories`。
+依赖:`octoterm-server`、`winit` 0.30、`egui` 0.36 + `egui-winit` + `egui-wgpu`、
+`tray-icon`、`muda`、`toml_edit`、`tokio`、`anyhow`、`tracing`、`tracing-subscriber`、
+`directories`、`fs4`(单实例锁)、`png`(解托盘图标)、`winreg`(Windows 开机自启)。
+
+渲染后端选 **egui-wgpu 而不是 egui_glow**:OpenGL 在 macOS 上自 10.14 起已废弃,
+而 `glutin-winit`(egui_glow 在 winit 上建 GL 上下文所必需)最后一个版本停在
+2024-06。wgpu 在 macOS 走 Metal、Windows 走 DX12,是受支持的原生路径 —— eframe
+自己也正是为此把默认后端切到了 wgpu。
 
 ## 配置写入
 
@@ -170,16 +180,23 @@ GUI 表格要花掉这个 crate 一半的代码量,换来的体验还不如直�
 
 ### 保存的顺序
 
+**地址发生变化时**(最常见,也是最危险的一种):
+
 ```
 1. 先 bind 新地址   ← 失败就到此为止,什么都没动,窗口里报错
 2. 成功 → 写 config.toml(toml_edit 就地改)  ← 失败则 drop 新 listener,不变
-3. graceful shutdown 旧的 axum
+3. abort 旧的 axum task
 4. 用新 listener + 新 AppState 重新 spawn
 5. 窗口提示「已生效 · N 个会话未受影响」
 ```
 
-先 bind 后关的顺序保证了「端口被占用」这种最常见的失败不会把用户锁在外面 ——
-旧的还在跑。任何一步失败都不会留下「两边都没有」的中间状态。
+先 bind 后关保证了「端口被占用」这种最常见的失败不会把用户锁在外面 —— 旧的还在跑。
+
+**地址没变、只改了 token 时**,先 bind 是做不到的:同一个地址上不能同时存在两个
+listener(`SO_REUSEPORT` 在 Windows 上不可用,`SO_REUSEADDR` 在 Windows 上语义是
+抢占,不能用)。这种情况改为「先写文件 → abort 旧 task → 带重试地 bind(端口刚
+被自己释放,几次 20ms 的重试足够)」。万一仍然失败,进程进入「未监听」状态,托盘
+状态行和设置窗口如实显示,用户可以改地址重试 —— 仍然不会自锁。
 
 ## 失败处理
 
