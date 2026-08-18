@@ -14,13 +14,18 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+arboard = "3"
 directories = "5"
 fs4 = { version = "1", features = ["sync"] }
 octoterm-server = { path = "../server" }
+open = "5"
+png = "0.18"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 toml_edit = "0.25"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tray-icon = "0.24"
+winit = "0.30.13"
 
 [dev-dependencies]
 futures-util = "0.3"
