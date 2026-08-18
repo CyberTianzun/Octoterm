@@ -1868,8 +1868,21 @@ git commit -m "feat(desktop): 按需创建/销毁的 egui + wgpu 窗口"
 > **实施中发现:下面这段代码的 egui 调用方式已过时,不能照抄。** egui 0.36 里
 > `Context::run` 已移除,`CentralPanel::show` 改收 `&mut Ui` 而不是 `&Context`,
 > 所以 `egui::CentralPanel::default().show(ctx, |ui| …)` 是类型错误。
-> Task 7 为此在 `EguiWindow` 上加了 `redraw_ui(impl FnOnce(&mut egui::Ui))`,
+> Task 7 为此在 `EguiWindow` 上加了 `redraw_ui(impl FnMut(&mut egui::Ui))`,
 > **设置界面请用它**,并把 `draw` 的签名改成收 `&mut egui::Ui`。
+>
+> **闭包同一帧可能被调用两趟。** egui 的 `request_discard` 会让回调重跑,而
+> `egui::Grid`(设置界面排 label/输入框用的正是它)每次开窗第一帧必然触发。所以
+> 闭包里**只能赋值,不能放一次性副作用** —— 写成
+> `if draw(ui) == Outcome::Save { self.save() }` 会保存两次。正确范式:
+>
+> ```rust
+> let mut outcome = Outcome::None;
+> w.redraw_ui(|ui| outcome = draw(ui, view));   // 只赋值,最后一趟的结果胜出
+> match outcome { … }                            // 副作用在闭包外执行
+> if w.close_requested() { /* 关窗 */ }
+> ```
+>
 > 下面的代码只作为「要画哪些控件、布局什么样、返回哪些意图」的参考。
 
 - [ ] **Step 1: 实现 settings/ui.rs**

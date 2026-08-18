@@ -158,7 +158,12 @@ impl EguiWindow {
 
     /// 画一帧,回调拿到的是 [`egui::Context`]。
     ///
-    /// **只适合画不会触发 sizing pass 的浮层**(`Window` / `Modal` / `Popup`)。
+    /// **新代码一律用 [`Self::redraw_ui`];这个方法仅为兼容保留。**
+    ///
+    /// 别指望「只要不画面板就安全」——`egui::Window` 内部就嵌着 `Resize`,首帧自适应
+    /// 大小时照样触发 sizing pass,走的是下面同一条空白帧路径。安全的用法窄到不值得
+    /// 记:直接用 `redraw_ui`。
+    ///
     /// 原因:签名承诺的是 `FnOnce`,而 `Context::run_ui` 是个循环——任何
     /// `request_discard`(`Grid` 的首帧测量、`Resize` 的 sizing pass 都会请求)都会
     /// 让回调被再调一次,而 `FullOutput::append` 里写死了「只保留最后一趟的
