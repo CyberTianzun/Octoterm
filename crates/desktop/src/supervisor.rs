@@ -2,7 +2,9 @@
 //!
 //! 全部要点只有一句:`SessionManager` 由 Supervisor **长期持有**,跨 restart 不
 //! 重建。HTTP 层(listener + AppState)可以随便拆了重搭,pty 会话一个都不会丢 ——
-//! 客户端看到的只是一次断线,按既有的 seamless resume 自己接回来。
+//! 但这只对**新连接**成立:新连接会连到新的 HTTP 层;已经升级完成的旧
+//! WebSocket 不会被这次 restart 打断,会继续跑在旧的 AppState 上,直到客户端
+//! 自己断开。
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -106,14 +108,17 @@ impl Supervisor {
     ///
     /// 已知限制:abort 只终止 accept 循环并释放监听端口,**已经升级完成的
     /// WebSocket 会继续用旧的 AppState(旧 token)跑下去**。原因是 axum 的 ws
-    /// 回调跑在 `on_upgrade` 自己 `tokio::spawn` 出去的独立任务里,abort 掉 serve
-    /// 任务够不着它。范围仅限于此:普通的 HTTP keep-alive 连接反而会被收掉 ——
-    /// serve 的 future 被 drop 时 `signal_rx` 一并没了,每条连接任务上的
-    /// `signal_tx.closed()` 会触发 `conn.graceful_shutdown()`。
+    /// 回调跑在 `on_upgrade` 自己 `tokio::spawn` 出去的独立任务里,持有的是 accept
+    /// 出来的独立 fd,abort 掉 serve 任务够不着它。范围仅限于此:普通的 HTTP
+    /// keep-alive 连接反而会被收掉 —— serve 的 future 被 drop 时 `signal_rx` 一并
+    /// 没了,每条连接任务上的 `signal_tx.closed()` 会触发
+    /// `conn.graceful_shutdown()`。
     ///
-    /// 落到用户身上:换端口无害(端口都没了,连接自然断);只有**同地址轮换
-    /// token** 时,持着旧 token 的在线 WebSocket 会一直活到客户端自己断开,新
-    /// token 要等它下次重连才生效。要做到立即失效得由 server 侧支持,这里够不着。
+    /// 落到用户身上:不管 restart 是否换了监听地址,已经升级完成的旧 WebSocket
+    /// 都不受影响 —— 会带着旧 token 一直活到客户端自己断开;真正变化的只是
+    /// **新连接**连去哪(换地址后连新地址,同地址轮换 token 后新连接才用得上
+    /// 新 token)。换句话说,restart 从来都不是甩掉一条旧连接或旧 token 的有效
+    /// 手段。要做到立即失效得由 server 侧支持,这里够不着。
     pub fn stop(&mut self) {
         if let Some(r) = self.running.take() {
             r.join.abort();
