@@ -4,7 +4,7 @@
 use anyhow::{Context, Result};
 use octoterm_desktop::app::{App, UserEvent};
 use octoterm_desktop::supervisor::Supervisor;
-use octoterm_desktop::{autostart, configfile, logs, single_instance};
+use octoterm_desktop::{configfile, logs, single_instance};
 use octoterm_server::config::Config;
 use winit::event_loop::EventLoop;
 
@@ -19,8 +19,6 @@ fn main() -> Result<()> {
             return Ok(());
         }
     };
-
-    heal_autostart();
 
     // 配置读不出来不是致命错误:托盘照样要出来,用户才有地方修它(见 Task 9)
     let config = Config::load(None).unwrap_or_default();
@@ -42,26 +40,14 @@ fn main() -> Result<()> {
     {
         use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
         builder.with_activation_policy(ActivationPolicy::Accessory);
+        // 默认会在启动瞬间把前台应用踢下去抢焦点(activate_ignoring_other_apps 默认
+        // true)。一个开机自启的托盘常驻应用这么干不合常规——用户当时在忙别的事,
+        // 不该被 octoterm 打断,关掉这个行为。
+        builder.with_activate_ignoring_other_apps(false);
     }
     let event_loop = builder.build().context("无法创建事件循环")?;
     let proxy = event_loop.create_proxy();
     let mut app = App::new(rt, sup, proxy, log_path);
     event_loop.run_app(&mut app).context("事件循环异常退出")?;
     Ok(())
-}
-
-/// 自愈开机自启:`is_enabled()` 只看注册项在不在,不看它指向的可执行文件还在不在。
-/// app 被移动、重命名或重装后,那条注册项就成了死链 —— 开关照样显示「已启用」,
-/// 下次登录却什么都不会启动。所以每次启动都用当前 `current_exe()` 幂等地重写一遍。
-/// 这一步失败不能挡住程序启动:自启只是锦上添花,记一条 warn 继续走。
-fn heal_autostart() {
-    match autostart::is_enabled() {
-        Ok(true) => {
-            if let Err(e) = autostart::set(true) {
-                tracing::warn!(error = %e, "重写开机自启项失败,下次登录可能不会自动启动");
-            }
-        }
-        Ok(false) => {}
-        Err(e) => tracing::warn!(error = %e, "无法读取开机自启状态"),
-    }
 }

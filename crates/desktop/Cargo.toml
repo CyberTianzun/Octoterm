@@ -19,6 +19,8 @@ directories = "5"
 fs4 = { version = "1", features = ["sync"] }
 octoterm-server = { path = "../server" }
 open = "5"
+# 版本与 crates/server/Cargo.toml 保持一致,不要升级(那边已经在用它解析 iTerm2 的偏好设置)。
+plist = "1"
 png = "0.18"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 toml_edit = "0.25"

@@ -1,5 +1,6 @@
 //! winit 的 ApplicationHandler:所有状态都在主线程上,tokio 在后台线程。
 
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use octoterm_server::session::manager::SessionManager;
@@ -28,6 +29,20 @@ pub enum UserEvent {
     SessionsChanged,
 }
 
+/// 把监听地址的 IP 部分整理成用户能直接用的样子:`0.0.0.0` / `::` 这类「监听所有
+/// 网卡」的地址,人是没法拿它当访问地址敲进浏览器的,换成 `127.0.0.1`;IPv6 地址
+/// 拼进 URL 需要方括号包起来。`status_text()` 和 `url()` 共用这一份,保证状态行
+/// 显示的 host 和「复制访问链接」给出的 host 永远一致。
+fn display_host(ip: IpAddr) -> String {
+    if ip.is_unspecified() {
+        "127.0.0.1".to_string()
+    } else if ip.is_ipv6() {
+        format!("[{ip}]")
+    } else {
+        ip.to_string()
+    }
+}
+
 pub struct App {
     rt: Runtime,
     sup: Supervisor,
@@ -50,22 +65,17 @@ impl App {
     fn url(&self) -> Option<String> {
         let listen = self.sup.listen()?;
         let token = self.sup.token()?;
-        let ip = listen.ip();
-        let host = if ip.is_unspecified() {
-            "127.0.0.1".to_string()
-        } else if ip.is_ipv6() {
-            format!("[{ip}]")
-        } else {
-            ip.to_string()
-        };
-        Some(format!("http://{host}:{}/#token={token}", listen.port()))
+        Some(format!("http://{}:{}/#token={token}", display_host(listen.ip()), listen.port()))
     }
 
+    /// 状态行里能实际打开的 host。和 `url()` 用同一个 `display_host`,不然配置成
+    /// `0.0.0.0` 时状态行显示 `0.0.0.0:7683`,用户照着敲进浏览器却打不开——
+    /// 「复制访问链接」给的却是 `127.0.0.1`,两处得说一样的话。
     fn status_text(&self) -> String {
         match self.sup.listen() {
             Some(addr) => {
                 let n = self.sup.manager().list().len();
-                format!("octoterm · {addr} · {n} 个会话")
+                format!("octoterm · {}:{} · {n} 个会话", display_host(addr.ip()), addr.port())
             }
             None => "octoterm · 未监听".to_string(),
         }
@@ -116,21 +126,23 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::SessionsChanged => self.refresh_status(),
-            UserEvent::MenuClicked(MenuAction::OpenWeb) => {
-                if let Some(url) = self.url()
-                    && let Err(e) = open::that_detached(url)
-                {
-                    tracing::error!(error = %e, "打开浏览器失败");
-                }
-            }
-            UserEvent::MenuClicked(MenuAction::CopyUrl) => {
-                if let Some(url) = self.url() {
-                    match arboard::Clipboard::new().and_then(|mut c| c.set_text(url)) {
-                        Ok(()) => {}
-                        Err(e) => tracing::error!(error = %e, "复制到剪贴板失败"),
+            UserEvent::MenuClicked(MenuAction::OpenWeb) => match self.url() {
+                Some(url) => {
+                    if let Err(e) = open::that_detached(url) {
+                        tracing::error!(error = %e, "打开浏览器失败");
                     }
                 }
-            }
+                // http 层没监听成功(比如端口被占用),点了菜单却什么都不会发生——
+                // 不留日志的话用户根本无从判断是没反应还是自己没点中。
+                None => tracing::warn!("尚未监听,无法打开 Web 客户端"),
+            },
+            UserEvent::MenuClicked(MenuAction::CopyUrl) => match self.url() {
+                Some(url) => match arboard::Clipboard::new().and_then(|mut c| c.set_text(url)) {
+                    Ok(()) => {}
+                    Err(e) => tracing::error!(error = %e, "复制到剪贴板失败"),
+                },
+                None => tracing::warn!("尚未监听,无法复制访问链接"),
+            },
             UserEvent::MenuClicked(MenuAction::ViewLogs) => {
                 if let Err(e) = open::that_detached(&self.log_path) {
                     tracing::error!(error = %e, "打开日志失败");

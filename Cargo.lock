@@ -2226,6 +2226,7 @@ dependencies = [
  "octoterm-protocol",
  "octoterm-server",
  "open",
+ "plist",
  "png",
  "serde_json",
  "tempfile",

@@ -64,12 +64,6 @@ impl Tray {
             &quit,
         ])?;
 
-        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
-            if let Some((_, action)) = ids.iter().find(|(id, _)| *id == e.id) {
-                let _ = proxy.send_event(UserEvent::MenuClicked(*action));
-            }
-        }));
-
         let builder = TrayIconBuilder::new()
             .with_menu(Box::new(menu))
             .with_tooltip("octoterm")
@@ -78,7 +72,17 @@ impl Tray {
         #[cfg(target_os = "macos")]
         let builder = builder.with_icon_as_template(true);
 
-        Ok(Self { icon: builder.build().context("无法创建托盘图标")?, status })
+        let icon = builder.build().context("无法创建托盘图标")?;
+
+        // handler 是进程级全局的,放在 build() 成功之后再注册:build 失败时不留下
+        // 一个指向不存在的托盘的全局 handler。
+        MenuEvent::set_event_handler(Some(move |e: MenuEvent| {
+            if let Some((_, action)) = ids.iter().find(|(id, _)| *id == e.id) {
+                let _ = proxy.send_event(UserEvent::MenuClicked(*action));
+            }
+        }));
+
+        Ok(Self { icon, status })
     }
 
     /// 状态行 + tooltip 用同一段文字。tooltip 只是设个字符串,比每次会话变化都
