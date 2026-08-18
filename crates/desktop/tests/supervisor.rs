@@ -1,7 +1,10 @@
 use std::time::Duration;
 
+use futures_util::{SinkExt, StreamExt};
 use octoterm_desktop::supervisor::Supervisor;
+use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
 use octoterm_server::config::WindowSize;
+use tokio_tungstenite::tungstenite::Message;
 
 /// 一个不会自己退出的会话,测完由 kill 收尾。
 fn long_lived_cmd() -> Option<Vec<String>> {
@@ -81,4 +84,69 @@ async fn stop_releases_the_port_but_not_the_sessions() {
 
     let id = sup.manager().list()[0].id;
     sup.manager().kill(id);
+}
+
+// ---- 下面这条测试专门复现「持有活跃 WebSocket 时同地址重启」----
+//
+// 注意:这条测试在 macOS 上恒绿**不代表功能没问题**,真正的判据在 Windows。
+//
+// 链条是这样的:`restart` 走「地址没变、只改 token」时是先 `stop()` 再带重试地
+// bind;而 `stop()` 的 abort 够不着已经升级完成的 WebSocket —— axum 的 ws 回调跑在
+// `on_upgrade` 自己 `tokio::spawn` 出去的独立任务里。那条连接的 TCP socket,其
+// local port 就是监听端口,而且按 octoterm 的产品设计它永远不主动关闭。于是重新
+// bind 时,同一个 local port 上还挂着一批 ESTABLISHED socket。
+//
+// mio 只在 Unix 给 TcpListener 设 `SO_REUSEADDR`,Windows 上**明确不设**(见 mio
+// 的 `src/net/tcp/listener.rs`,注释里指向 MS 文档)。所以 macOS 有 `SO_REUSEADDR`
+// 兜底,问题被完全遮住;Windows 上则可能 bind 不回来 —— 而这条路径是先 stop 后
+// bind 的,重试全败就会停在「完全没有 HTTP 层」的状态上。
+//
+// 这条测试的价值就在于挂上 Windows CI 之后能把它暴露出来。
+
+type Ws = tokio_tungstenite::WebSocketStream<
+    tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+>;
+
+fn control(msg: &ClientMsg) -> Message {
+    Message::Binary(Frame::new(CONTROL_CHANNEL, serde_json::to_vec(msg).unwrap()).encode().into())
+}
+
+fn parse_control(msg: Message) -> Option<ServerMsg> {
+    let Message::Binary(data) = msg else { return None };
+    let frame = Frame::decode(&data).unwrap();
+    (frame.channel == CONTROL_CHANNEL).then(|| serde_json::from_slice(&frame.payload).unwrap())
+}
+
+/// 连上并**完成握手**(必须走到 upgrade 完成:普通 HTTP keep-alive 连接在 abort 时
+/// 会被 graceful_shutdown 收掉,只有已升级的 WS 才会存活下来)。
+async fn connect_authed(addr: std::net::SocketAddr, token: &str) -> Ws {
+    let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
+    ws.send(control(&ClientMsg::Hello { token: token.into(), proto: PROTO_VERSION }))
+        .await
+        .unwrap();
+    loop {
+        if let Some(ServerMsg::HelloOk { .. }) = parse_control(ws.next().await.unwrap().unwrap()) {
+            break;
+        }
+    }
+    ws
+}
+
+#[tokio::test]
+async fn restarting_the_same_address_while_a_websocket_is_still_connected() {
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "old".into()).await.unwrap();
+
+    // 握手完成的活连接,整条测试期间**不断开**(underscore 绑定只是压警告,
+    // 生命周期到函数结束才结束)。
+    let _held = connect_authed(addr, "old").await;
+
+    // 同地址、只换 token:先 stop 后 bind,此时旧连接还占着这个 local port。
+    let again = sup.restart(addr, "new".into()).await.unwrap();
+
+    assert_eq!(addr, again, "同地址重启不该换地址");
+    assert_eq!(sup.token(), Some("new"), "token 应当已经轮换");
+
+    // 新地址必须真的能用:不光 TCP 连得上,还要能走完新 token 的握手。
+    let _fresh = connect_authed(again, "new").await;
 }

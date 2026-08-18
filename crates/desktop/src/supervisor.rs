@@ -65,17 +65,25 @@ impl Supervisor {
     /// 由调用方决定是提示用户还是换个地址再来。
     pub async fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr> {
         let same_addr = self.running.as_ref().is_some_and(|r| r.listen == listen);
-        let listener = if same_addr {
+        let (listener, actual) = if same_addr {
             self.stop();
-            bind_with_retry(listen).await?
+            let l = bind_with_retry(listen).await?;
+            let actual = l
+                .local_addr()
+                .with_context(|| format!("无法读取 {listen} 上的实际监听地址"))?;
+            (l, actual)
         } else {
             let l = TcpListener::bind(listen)
                 .await
                 .with_context(|| format!("无法监听 {listen}"))?;
+            // local_addr 也可能失败,所以要赶在 stop() 之前读完:等旧的关掉了才
+            // 发现读不出新地址,就会留下「旧的已关、新的没记账」的空档。
+            let actual = l
+                .local_addr()
+                .with_context(|| format!("无法读取 {listen} 上的实际监听地址"))?;
             self.stop();
-            l
+            (l, actual)
         };
-        let actual = listener.local_addr()?;
         let state = AppState {
             manager: self.manager.clone(),
             token: token.clone(),
@@ -96,10 +104,16 @@ impl Supervisor {
     /// 用 abort 而不是 axum 的 graceful shutdown:graceful 会等所有连接结束,而
     /// WebSocket 是长连接,永远不结束 —— 那等于挂死。
     ///
-    /// 已知限制:`axum::serve` 是给每条连接单独 `tokio::spawn` 的,abort 只终止
-    /// accept 循环并释放监听端口,**已经建立的连接会继续用旧的 AppState 跑下去**。
-    /// 也就是说改 token 不会把当前已连上的客户端踢掉(下次重连才生效)。要做到
-    /// 立即失效得由 server 侧支持,这里够不着。
+    /// 已知限制:abort 只终止 accept 循环并释放监听端口,**已经升级完成的
+    /// WebSocket 会继续用旧的 AppState(旧 token)跑下去**。原因是 axum 的 ws
+    /// 回调跑在 `on_upgrade` 自己 `tokio::spawn` 出去的独立任务里,abort 掉 serve
+    /// 任务够不着它。范围仅限于此:普通的 HTTP keep-alive 连接反而会被收掉 ——
+    /// serve 的 future 被 drop 时 `signal_rx` 一并没了,每条连接任务上的
+    /// `signal_tx.closed()` 会触发 `conn.graceful_shutdown()`。
+    ///
+    /// 落到用户身上:换端口无害(端口都没了,连接自然断);只有**同地址轮换
+    /// token** 时,持着旧 token 的在线 WebSocket 会一直活到客户端自己断开,新
+    /// token 要等它下次重连才生效。要做到立即失效得由 server 侧支持,这里够不着。
     pub fn stop(&mut self) {
         if let Some(r) = self.running.take() {
             r.join.abort();
@@ -123,12 +137,15 @@ impl Drop for Supervisor {
 /// sleep 同时也是让出执行权给那个待丢弃的任务。
 async fn bind_with_retry(listen: SocketAddr) -> Result<TcpListener> {
     let mut last = None;
-    for _ in 0..BIND_RETRIES {
+    for attempt in 0..BIND_RETRIES {
         match TcpListener::bind(listen).await {
             Ok(l) => return Ok(l),
             Err(e) => {
                 last = Some(e);
-                tokio::time::sleep(BIND_RETRY_INTERVAL).await;
+                // 最后一次失败之后没有下一轮了,不必再白等一个 interval。
+                if attempt + 1 < BIND_RETRIES {
+                    tokio::time::sleep(BIND_RETRY_INTERVAL).await;
+                }
             }
         }
     }
