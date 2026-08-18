@@ -1865,6 +1865,13 @@ git commit -m "feat(desktop): 按需创建/销毁的 egui + wgpu 窗口"
 `draw` 只画和收集意图,**不做任何 IO** —— 保存的副作用全在 `app.rs` 里。这样 UI 层
 始终是纯的,不需要测。
 
+> **实施中发现:下面这段代码的 egui 调用方式已过时,不能照抄。** egui 0.36 里
+> `Context::run` 已移除,`CentralPanel::show` 改收 `&mut Ui` 而不是 `&Context`,
+> 所以 `egui::CentralPanel::default().show(ctx, |ui| …)` 是类型错误。
+> Task 7 为此在 `EguiWindow` 上加了 `redraw_ui(impl FnOnce(&mut egui::Ui))`,
+> **设置界面请用它**,并把 `draw` 的签名改成收 `&mut egui::Ui`。
+> 下面的代码只作为「要画哪些控件、布局什么样、返回哪些意图」的参考。
+
 - [ ] **Step 1: 实现 settings/ui.rs**
 
 ```rust
