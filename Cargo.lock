@@ -2739,6 +2739,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "tray-icon",
+ "uuid",
  "winit",
  "winreg 0.56.0",
 ]

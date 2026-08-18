@@ -59,6 +59,8 @@ impl EguiWindow {
         let window = Arc::new(event_loop.create_window(attrs).context("无法创建窗口")?);
 
         let egui_ctx = egui::Context::default();
+        // 必须赶在第一帧之前:egui 默认字体一个汉字都没有,界面文案全是中文。
+        crate::fonts::install(&egui_ctx);
         let egui_state = egui_winit::State::new(
             egui_ctx.clone(),
             VIEWPORT,

@@ -14,6 +14,15 @@ pub struct Form {
     pub autostart: bool,
 }
 
+/// 保存之后给用户看的一句话。定义在这里而不是 ui.rs:保存流程
+/// ([`crate::settings::save`])要用它,而那一层刻意不认识 egui。
+/// ui.rs 里有 `pub use`,对外仍是 `settings::ui::Message`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Message {
+    Ok(String),
+    Err(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldError {
     Host(String),

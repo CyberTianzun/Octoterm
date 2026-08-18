@@ -47,7 +47,8 @@ fn main() -> Result<()> {
     }
     let event_loop = builder.build().context("无法创建事件循环")?;
     let proxy = event_loop.create_proxy();
-    let mut app = App::new(rt, sup, proxy, log_path);
+    // config 在 Supervisor::new 里只是被借用,这里把整份交给 App 做只读展示
+    let mut app = App::new(rt, sup, proxy, log_path, config);
     event_loop.run_app(&mut app).context("事件循环异常退出")?;
     Ok(())
 }

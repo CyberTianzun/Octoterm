@@ -1,8 +1,11 @@
 //! winit 的 ApplicationHandler:所有状态都在主线程上,tokio 在后台线程。
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use anyhow::Result;
+use octoterm_server::config::Config;
 use octoterm_server::session::manager::SessionManager;
 use tokio::runtime::Runtime;
 use tokio::sync::broadcast::error::RecvError;
@@ -49,11 +52,16 @@ pub struct App {
     sup: Supervisor,
     tray: Option<Tray>,
     proxy: EventLoopProxy<UserEvent>,
-    log_path: std::path::PathBuf,
+    log_path: PathBuf,
+    /// 启动时读到的配置。这里只用它只读展示 window_size 与 [[launcher]] ——
+    /// 这两项设置界面不提供修改,改了也不会写回这个副本。
+    config: Config,
     /// 平时是 None——托盘常驻应用不该在后台挂着一个隐藏窗口和一整套 GPU 上下文。
     /// 点「设置…」时创建,关窗口时置回 None,`EguiWindow` 的 Drop 负责把 surface
     /// 和 device 还给系统。
     settings_window: Option<EguiWindow>,
+    /// 设置窗口的界面状态,和 `settings_window` 同生共死(开窗时建、关窗时清)。
+    view: Option<crate::settings::ui::View>,
 }
 
 impl App {
@@ -61,9 +69,75 @@ impl App {
         rt: Runtime,
         sup: Supervisor,
         proxy: EventLoopProxy<UserEvent>,
-        log_path: std::path::PathBuf,
+        log_path: PathBuf,
+        config: Config,
     ) -> Self {
-        Self { rt, sup, tray: None, proxy, log_path, settings_window: None }
+        Self {
+            rt,
+            sup,
+            tray: None,
+            proxy,
+            log_path,
+            config,
+            settings_window: None,
+            view: None,
+        }
+    }
+
+    /// 打开设置窗口时,从当前生效值构造视图。
+    fn build_view(&self) -> crate::settings::ui::View {
+        use crate::settings::{state::Form, ui::View};
+        let listen = self.sup.listen().unwrap_or(self.config.listen);
+        // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
+        let autostart = crate::autostart::is_enabled().unwrap_or(false);
+        let mut form = Form::from_current(listen, autostart);
+        // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解
+        form.token = self.sup.token().unwrap_or_default().to_string();
+        View {
+            form,
+            // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
+            // 里写的小写形式一一对应。
+            window_size: format!("{:?}", self.config.window_size).to_lowercase(),
+            launchers: self
+                .config
+                .launchers
+                .iter()
+                .map(|l| (l.name.clone(), l.command.join(" ")))
+                .collect(),
+            message: None,
+        }
+    }
+
+    /// 执行「保存并应用」。真正的分支逻辑在 [`crate::settings::save::apply`],
+    /// 这里只负责把当前状态喂进去、把结果贴回界面。
+    fn apply_settings(&mut self) {
+        use crate::settings::save::{apply, Current};
+
+        let Some(view) = self.view.as_ref() else { return };
+        // 先把表单拷出来:下面要 &mut 借 self.sup,不能同时挂着 self.view 的借用。
+        let form = view.form.clone();
+        let current = Current {
+            listen: self.sup.listen(),
+            token: self.sup.token().unwrap_or_default().to_string(),
+            sessions: self.sup.manager().list().len(),
+        };
+
+        let mut fx = AppEffects { rt: &self.rt, sup: &mut self.sup };
+        let applied = apply(&form, &current, &mut fx);
+
+        if applied.restarted {
+            self.refresh_status();
+        }
+        if let Some(view) = self.view.as_mut() {
+            view.message = Some(applied.message);
+        }
+    }
+
+    /// 关掉设置窗口:GPU 资源随 `EguiWindow` 的 Drop 当场还回去,界面状态一并
+    /// 丢掉——下次开窗要重新读当前生效值,而不是接着上次没保存的输入往下改。
+    fn close_settings(&mut self) {
+        self.settings_window = None;
+        self.view = None;
     }
 
     /// 带 token 的访问 URL,和 CLI 启动时打印的那一行是同一格式。
@@ -106,6 +180,35 @@ impl App {
                 }
             }
         });
+    }
+}
+
+/// [`crate::settings::save::Effects`] 的真实实现:保存流程要做的 IO 都在这儿。
+///
+/// 单独一个结构体而不是给 `App` 实现:`apply` 要 `&mut` 借 supervisor,而同一时刻
+/// 界面状态(`App::view`)还得留着写回提示文案,借整个 `App` 就冲突了。
+struct AppEffects<'a> {
+    rt: &'a Runtime,
+    sup: &'a mut Supervisor,
+}
+
+impl crate::settings::save::Effects for AppEffects<'_> {
+    fn set_autostart(&mut self, enabled: bool) -> Result<()> {
+        crate::autostart::set(enabled)
+    }
+
+    fn config_path(&mut self) -> Result<PathBuf> {
+        crate::configfile::default_path()
+    }
+
+    fn save_config(&mut self, path: &Path, edit: &crate::configfile::Editable) -> Result<()> {
+        crate::configfile::save(path, edit)
+    }
+
+    fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr> {
+        // 有意用 block_on 把 UI 线程卡住:换来的是保存流程完全串行、界面上不存在
+        // 「正在保存」这种中间态。一次点击卡这一下(bind + spawn,毫秒级)可以接受。
+        self.rt.block_on(self.sup.restart(listen, token))
     }
 }
 
@@ -155,9 +258,15 @@ impl ApplicationHandler<UserEvent> for App {
             }
             UserEvent::MenuClicked(MenuAction::Settings) => {
                 if self.settings_window.is_none() {
-                    match EguiWindow::open(event_loop, "octoterm 设置", (460, 420)) {
+                    // 每次开窗都重新读一遍当前生效值,而不是复用上次关窗时的表单:
+                    // 期间监听地址可能已经被别处改过了。
+                    self.view = Some(self.build_view());
+                    match EguiWindow::open(event_loop, "octoterm 设置", (460, 460)) {
                         Ok(w) => self.settings_window = Some(w),
-                        Err(e) => tracing::error!(error = %e, "无法打开设置窗口"),
+                        Err(e) => {
+                            tracing::error!(error = %e, "无法打开设置窗口");
+                            self.view = None;
+                        }
                     }
                 }
                 // 窗口已经开着的话,这一下就当「把它叫到前面来」。
@@ -184,20 +293,50 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => {
                 // 关窗口只是关窗口,程序继续常驻。置 None 触发 Drop,GPU 资源当场
                 // 还回去——不是 set_visible(false) 那种「藏起来留着」。
-                self.settings_window = None;
+                self.close_settings();
             }
             WindowEvent::RedrawRequested => {
+                use crate::settings::ui::{draw, Outcome};
                 // 这个闭包同一帧里可能被调用多次(Grid 之类的容器会让 egui 重跑一
-                // 趟),所以只能描述界面,不能在里面放一次性的副作用。
-                w.redraw_ui(|ui| {
-                    egui::CentralPanel::default().show(ui, |ui| {
-                        ui.label("设置界面将在下一步实现");
-                    });
-                });
+                // 趟),所以只能描述界面、只能往 outcome 上赋值,一次性的副作用
+                // 全部挪到闭包外做一次。
+                let mut outcome = Outcome::None;
+                if let Some(view) = self.view.as_mut() {
+                    w.redraw_ui(|ui| outcome = draw(ui, view));
+                }
+                let closed = w.close_requested();
+                match outcome {
+                    Outcome::None => {}
+                    Outcome::Save => self.apply_settings(),
+                    Outcome::Cancel => self.close_settings(),
+                    Outcome::OpenConfigFile => match crate::configfile::default_path() {
+                        Ok(p) => {
+                            if let Err(e) = open::that_detached(&p) {
+                                tracing::error!(error = %e, "打开配置文件失败");
+                            }
+                        }
+                        Err(e) => tracing::error!(error = %e, "无法确定配置文件位置"),
+                    },
+                    Outcome::RegenerateToken => {
+                        if let Some(view) = self.view.as_mut() {
+                            // 和 server 的 resolve_token 用同一种格式(32 位十六进制)
+                            view.form.token = uuid::Uuid::new_v4().simple().to_string();
+                        }
+                    }
+                }
                 // 界面里 `send_viewport_cmd(ViewportCommand::Close)` 的结果从这里
-                // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。
-                if w.close_requested() {
-                    self.settings_window = None;
+                // 出来:窗口自己关不掉自己,得由持有它的这一层置 None。设置界面
+                // 目前不发这条命令(「取消」走的是 `Outcome::Cancel`),但
+                // `EguiWindow` 的约定要求每帧看一眼,漏了以后加就会静默失效。
+                if closed {
+                    self.close_settings();
+                }
+                // 保存结果、重新生成的 token 这些都是刚刚才写进 view 的,而这一帧
+                // 已经画完了 —— 不主动再要一帧,用户点完按钮会看不到任何变化。
+                if outcome != Outcome::None
+                    && let Some(w) = &self.settings_window
+                {
+                    w.request_redraw();
                 }
             }
             _ => w.request_redraw(),
