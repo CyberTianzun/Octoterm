@@ -163,14 +163,20 @@ impl Drop for Supervisor {
     /// `force_close_pty()`)只是发出终止信号、关掉 pty 的 writer/master 句柄,
     /// 不等待子进程被 wait 线程真正 reap,是同步且非阻塞的。abort 同样不要求
     /// 当前在 runtime 里,runtime 已经关掉时也是安全的空操作。
+    /// **这条路径跑在 tokio runtime 已经关闭之后**:`App` 的字段顺序让 `rt` 先于
+    /// `sup` 析构。今天安全是因为整条 kill 路径全同步 —— 一旦有人往
+    /// `Session::kill` / `force_close_pty` 里加了 `.await` 或 `tokio::spawn`,
+    /// 这里会在没有 runtime 的情况下 panic,**而且没有任何编译期提示**。
     fn drop(&mut self) {
+        // 顺序与 `app::shutdown()` 保持一致:先停掉 accept 循环,再清会话,
+        // 免得刚快照完又有新连接建出一个会话来。
+        self.stop();
         let ids: Vec<u64> = self.manager.list().iter().map(|s| s.id).collect();
         for id in ids {
             // 返回值丢弃的原因见 `app::shutdown()` 里同样的调用点:false 只是
             // 良性竞争(会话已经自己退出),不代表这里出了问题。
             self.manager.kill(id);
         }
-        self.stop();
     }
 }
 

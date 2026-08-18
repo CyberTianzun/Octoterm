@@ -50,7 +50,7 @@ async fn shutdown_kills_every_session() {
             }
             tokio::time::sleep(Duration::from_millis(25)).await;
         }
-        assert!(exited, "会话 {name} 的子进程没有被杀掉");
+        assert!(exited, "会话 {name} 的 kill 路径没有走到底(pty 一直没被拆掉)");
     }
 }
 
