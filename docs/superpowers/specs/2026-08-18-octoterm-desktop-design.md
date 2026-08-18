@@ -79,8 +79,18 @@ pty 会话全在 `Arc<SessionManager>` 里。因此改配置的正确做法不�
 永远不结束 —— graceful 在这里等于挂死。正确做法是 abort 掉那个 task、连同 listener
 一起 drop。客户端本来就是为断线设计的(seamless resume),abort 就是这里的正确语义。
 
-`SessionManager` 原地不动,**所有 pty 会话零损失**,客户端 WebSocket 断一下、按
-既有的 seamless resume 自己接回来 —— 正是本项目本来就擅长的事。
+`SessionManager` 原地不动,**所有 pty 会话零损失**。
+
+实现阶段实测修正了这里原本的说法(原文写的是「客户端 WebSocket 断一下、按既有的
+seamless resume 自己接回来」):**已经升级完成的 WebSocket 根本不会断。** axum 的 ws
+回调跑在 `on_upgrade` 自己 spawn 出去的独立任务里,持有的是 accept 出来的独立 fd,
+abort 掉 serve 任务够不着它。所以改端口之后,已经打开的页面继续在**旧端口**上正常
+工作,直到用户自己关掉;新连接才走新地址。
+
+这条的另一面是个安全边界:**restart 从来不是甩掉一条旧连接或旧 token 的有效手段**
+—— 换地址也不行。轮换 token 只影响新连接,旧 token 的在线 WebSocket 会一直活到
+客户端自己断开。要做到立即失效必须由 server 侧跟踪连接句柄,超出 desktop 的范围;
+v1 接受这个限制,在代码注释与设置界面里写清楚。
 
 按字段:
 
