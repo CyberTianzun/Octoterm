@@ -184,3 +184,40 @@ async fn restarting_the_same_address_while_a_websocket_is_still_connected() {
     // 新地址必须真的能用:不光 TCP 连得上,还要能走完新 token 的握手。
     let _fresh = connect_authed(again, "new").await;
 }
+
+/// 端到端钉死这个 crate 存在的理由:**restart 之后的新 HTTP 层,看到的必须是同一个
+/// `SessionManager`**。
+///
+/// 为什么不能只断言 `sup.manager().list().len()`:那读的是 Supervisor 自己那份
+/// `Arc<SessionManager>`,restart 里就算把 `AppState.manager` 换成一个全新的
+/// manager,这个断言照样绿 —— 而「新 HTTP 层接的是旧 manager」正是承诺本身。
+/// 所以这里必须绕出去,从**新地址**用新 token 握手,拿服务端返回的会话列表说话。
+#[tokio::test]
+async fn a_session_created_before_a_rebind_is_visible_from_the_new_address() {
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let old = sup.restart("127.0.0.1:0".parse().unwrap(), "t1".into()).await.unwrap();
+
+    let session = sup.manager().create(Some("survivor".into()), long_lived_cmd(), None).unwrap();
+    let id = session.id;
+
+    // 换地址 + 换 token:两样都变,新 HTTP 层是彻底重建出来的
+    let new = sup.restart("127.0.0.1:0".parse().unwrap(), "t2".into()).await.unwrap();
+    assert_ne!(old, new, "端口 0 每次应当分到不同端口");
+
+    let mut ws = connect_authed(new, "t2").await;
+    ws.send(control(&ClientMsg::ListSessions)).await.unwrap();
+    let sessions = loop {
+        if let Some(ServerMsg::Sessions { sessions }) =
+            parse_control(ws.next().await.unwrap().unwrap())
+        {
+            break sessions;
+        }
+    };
+
+    let found = sessions.iter().find(|s| s.id == id).unwrap_or_else(|| {
+        panic!("restart 之后新 HTTP 层看不到 rebind 前建的会话,manager 被重建了:{sessions:?}")
+    });
+    assert_eq!(found.name, "survivor");
+
+    sup.manager().kill(id);
+}
