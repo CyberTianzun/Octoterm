@@ -21,7 +21,8 @@ impl Drop for Guard {
 /// `Ok(None)` 表示已经有另一个实例在跑(不是错误,是正常分支)。
 pub fn acquire(path: &Path) -> Result<Option<Guard>> {
     if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
+        std::fs::create_dir_all(dir)
+            .with_context(|| format!("无法创建目录 {}", dir.display()))?;
     }
     let file = OpenOptions::new()
         .create(true)

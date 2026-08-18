@@ -3,6 +3,7 @@
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use octoterm_server::config::Config;
@@ -47,6 +48,19 @@ fn display_host(ip: IpAddr) -> String {
     }
 }
 
+/// 托盘第 `failures` 次创建失败之后,隔多久再试一次;`None` 表示不再试了。
+///
+/// 会重试是因为这个失败有明确的成因和明确的时间窗口:Windows 上 `Shell_NotifyIcon`
+/// 在 explorer.exe 尚未就绪时会失败,而开机自启 —— 这个 app 的主要启动方式 ——
+/// 正好落在那个窗口里。偏偏 `resumed` 在 Windows 上基本只会调一次,不重试就等于
+/// 永远没有托盘。
+///
+/// 指数退避,累计 7.5 秒(0.5 + 1 + 2 + 4)后放弃:够覆盖登录时 explorer 起来的
+/// 那一段,再久就不该让用户对着空菜单栏干等,该弹框说清楚然后退出了。
+pub fn tray_retry_delay(failures: u32) -> Option<Duration> {
+    (1..=4).contains(&failures).then(|| Duration::from_millis(500 << (failures - 1)))
+}
+
 /// 启动阶段的产物:配置本身,以及两条「起来了但没完全起来」的坏消息。
 ///
 /// 这两个错误必须一路带到 GUI 里 —— 配置坏了 / 端口占用时 Web UI 是打不开的,
@@ -64,6 +78,12 @@ pub struct App {
     rt: Runtime,
     sup: Supervisor,
     tray: Option<Tray>,
+    /// 托盘至今失败了几次。兼作「已经试过了」的标记:`resumed` 只负责发起第一次
+    /// 尝试,后续重试由 `new_events` 接管,这个计数一旦非零就再也不归零。
+    tray_failures: u32,
+    /// 下一次重试托盘的时刻。由 `about_to_wait` 排进 `ControlFlow::WaitUntil`,
+    /// 到点由 `new_events` 接回来 —— 不用 sleep,事件循环不能为了重试卡住。
+    tray_retry_at: Option<Instant>,
     proxy: EventLoopProxy<UserEvent>,
     log_path: PathBuf,
     /// 启动阶段的产物:配置副本 + 启动失败原因。配置只做只读展示(window_size
@@ -89,6 +109,8 @@ impl App {
             rt,
             sup,
             tray: None,
+            tray_failures: 0,
+            tray_retry_at: None,
             proxy,
             log_path,
             startup,
@@ -251,6 +273,69 @@ impl App {
             }
         });
     }
+
+    /// 建托盘。成功了顺手把随之而来的一次性初始化做掉,失败了排重试、退避用完就
+    /// 弹框退出。
+    ///
+    /// **绝不能只记一行日志就 return**:托盘是这个进程唯一的界面,它没建起来的时候
+    /// 程序既没有窗口也没有退出入口,事件循环却还在 `Wait` 上永久阻塞 —— HTTP 层
+    /// 占着端口、单实例锁挡着用户重开,只能去任务管理器杀进程。所以这里的出口只有
+    /// 两个:托盘起来了,或者进程退出了。
+    fn init_tray(&mut self, event_loop: &ActiveEventLoop) {
+        match Tray::new(self.proxy.clone()) {
+            Ok(tray) => {
+                tracing::info!(attempts = self.tray_failures + 1, "托盘已就绪");
+                self.tray = Some(tray);
+                self.tray_retry_at = None;
+                self.watch_sessions(self.sup.manager().clone());
+                self.refresh_status();
+
+                // 起不来的时候必须主动把窗口推到用户面前:这时候 Web UI 是打不开的,
+                // 设置窗口是唯一的出路。
+                //
+                // 位置在这个分支**里面**:托盘只会成功建起来一次,所以这一下也只会
+                // 发生一次,不会变成每次回到前台都弹一次设置窗口。
+                if self.startup.config_error.is_some() || self.startup.listen_error.is_some() {
+                    self.proxy.send_event(UserEvent::MenuClicked(MenuAction::Settings)).ok();
+                }
+            }
+            Err(e) => {
+                let reason = format!("{e:#}");
+                self.tray_failures += 1;
+                match tray_retry_delay(self.tray_failures) {
+                    Some(delay) => {
+                        tracing::warn!(
+                            error = %reason,
+                            failures = self.tray_failures,
+                            ?delay,
+                            "托盘创建失败,稍后重试"
+                        );
+                        self.tray_retry_at = Some(Instant::now() + delay);
+                    }
+                    None => {
+                        tracing::error!(
+                            error = %reason,
+                            failures = self.tray_failures,
+                            "托盘创建失败,放弃"
+                        );
+                        crate::dialog::fatal(
+                            "octoterm 无法启动",
+                            &format!(
+                                "无法创建托盘图标,重试 {} 次仍未成功。\n\n{reason}\n\n\
+                                 octoterm 只有托盘这一个界面,没有它就没法操作,现在退出。\
+                                 稍后可以再启动一次。",
+                                self.tray_failures
+                            ),
+                        );
+                        // 和「退出」菜单走同一条收尾:先关 HTTP 层再杀会话。这里不问
+                        // 用户 —— 托盘都没起来,谈不上有会话在跑,也没地方让他确认。
+                        shutdown(&mut self.sup);
+                        event_loop.exit();
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// 退出前的清理:先停掉 HTTP 层(挡住新连接建新会话),再**显式**杀掉每一个
@@ -367,31 +452,14 @@ impl crate::settings::save::Effects for AppEffects<'_> {
 }
 
 impl ApplicationHandler<UserEvent> for App {
-    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // 托盘常驻应用启动时不建窗口:设置窗口在用户点「设置…」时才创建。
-        if self.tray.is_none() {
-            match Tray::new(self.proxy.clone()) {
-                Ok(tray) => {
-                    tracing::info!("托盘已就绪");
-                    self.tray = Some(tray);
-                }
-                Err(e) => {
-                    tracing::error!(error = %format!("{e:#}"), "托盘创建失败");
-                    return;
-                }
-            }
-            self.watch_sessions(self.sup.manager().clone());
-            self.refresh_status();
-
-            // 起不来的时候必须主动把窗口推到用户面前:这时候 Web UI 是打不开的,
-            // 设置窗口是唯一的出路。
-            //
-            // 位置在 `self.tray.is_none()` 守卫**里面**:`resumed` 会被调用多次
-            // (macOS 上每次 activate 都可能来一发),放外面就变成每次回到前台
-            // 都弹一次设置窗口。
-            if self.startup.config_error.is_some() || self.startup.listen_error.is_some() {
-                self.proxy.send_event(UserEvent::MenuClicked(MenuAction::Settings)).ok();
-            }
+        //
+        // 这里只发起**第一次**尝试。`resumed` 会被调用多次(macOS 上每次 activate
+        // 都可能来一发),而 `tray_failures` 一旦非零就再也不归零 —— 正在重试的、
+        // 以及退避用完已经放弃的,都不会被这里重新拉起一轮。
+        if self.tray.is_none() && self.tray_failures == 0 {
+            self.init_tray(event_loop);
         }
     }
 
@@ -518,10 +586,16 @@ impl ApplicationHandler<UserEvent> for App {
 
     /// `WaitUntil` 到点只是把事件循环叫醒,它自己不产生重绘请求——光标闪烁、
     /// tooltip 延迟显示这类靠非零 `repaint_delay` 排期的东西,得在这里补一脚。
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
-        if matches!(cause, StartCause::ResumeTimeReached { .. })
-            && let Some(w) = &self.settings_window
-        {
+    fn new_events(&mut self, event_loop: &ActiveEventLoop, cause: StartCause) {
+        if !matches!(cause, StartCause::ResumeTimeReached { .. }) {
+            return;
+        }
+        // 托盘重试排在同一套 `WaitUntil` 上,到点了在这儿接回来。
+        if self.tray_retry_at.is_some_and(|at| Instant::now() >= at) {
+            self.tray_retry_at = None;
+            self.init_tray(event_loop);
+        }
+        if let Some(w) = &self.settings_window {
             w.request_redraw();
         }
     }
@@ -529,10 +603,13 @@ impl ApplicationHandler<UserEvent> for App {
     /// 每轮事件处理完、真正去睡之前决定「睡多久」。
     ///
     /// 没有窗口时是 `Wait`(无限期阻塞,直到有事件)——托盘常驻应用空闲时必须真的
-    /// 空闲,不能靠 `Poll` 忙转。有窗口且 egui 排了定时重绘时才 `WaitUntil`,到点
-    /// 由上面的 `new_events` 把重绘请求发出去。
+    /// 空闲,不能靠 `Poll` 忙转。有窗口且 egui 排了定时重绘、或者托盘还欠一次重试
+    /// 时才 `WaitUntil`,到点由上面的 `new_events` 处理。
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let flow = match self.settings_window.as_ref().and_then(|w| w.repaint_at()) {
+        // 两个排期取更早的那个,谁都不能被对方拖晚。
+        let repaint_at = self.settings_window.as_ref().and_then(|w| w.repaint_at());
+        let deadline = [repaint_at, self.tray_retry_at].into_iter().flatten().min();
+        let flow = match deadline {
             Some(at) => ControlFlow::WaitUntil(at),
             None => ControlFlow::Wait,
         };
