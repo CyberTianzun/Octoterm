@@ -80,6 +80,10 @@ impl Effects for FakeFx {
     }
 
     fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr> {
+        // 和 `Supervisor::restart` 开头的 `ensure!` 对齐。假实现比真实现宽松,
+        // 测试覆盖的就是一个不会出问题的世界 —— 空 token 那条 Critical 路径
+        // 已经因此被整套测试绕过去过一次,这里不再留这个口子。
+        assert!(!token.trim().is_empty(), "空 token 不该走到 restart:server 侧鉴权会全部放行");
         self.calls.push("restart");
         self.restarts.push((listen, token));
         // 照 `Supervisor::restart` 的两条路径改状态:地址没变时它**先 stop() 再

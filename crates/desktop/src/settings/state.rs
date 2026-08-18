@@ -42,8 +42,8 @@ impl Form {
         Self {
             host: listen.ip().to_string(),
             port: listen.port().to_string(),
-            // token 不从当前值回填:它是密钥,默认展示为空(= 不固定)容易误伤,
-            // 所以由调用方在构造后显式赋值,见 settings/ui.rs。
+            // token 不在这里回填:这一层不认识 Supervisor,拿不到当前生效值,
+            // 所以留空由调用方在构造后显式赋值 —— 见 app.rs 的 `App::build_view`。
             token: String::new(),
             autostart,
         }

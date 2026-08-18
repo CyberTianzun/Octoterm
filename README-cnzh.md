@@ -56,22 +56,6 @@ command = ["ssh", "prod01"]   # 直接是 argv,不是命令行字符串:不用�
 cwd = "~/work"                # 可选
 ```
 
-## 桌面客户端(Windows / macOS)
-
-`octoterm-desktop` 把同一套 server 内嵌进一个托盘常驻进程,配一个小巧的原生
-设置窗口。它不是终端客户端——终端仍然长在浏览器里。
-
-```sh
-cargo run -p octoterm-desktop
-```
-
-在设置窗口里改监听地址或 token,只会重建 HTTP 层:**运行中的会话不受影响**。
-但已经打开的页面不会跟着迁移——它的 WebSocket 根本没断,会继续在旧地址上工作,
-直到你自己关掉那个页面;只有新连接才会走新地址。退出程序会终止所有会话,
-所以有会话在跑时会先弹确认框。
-
-不支持 Linux。
-
 ### 新建会话菜单
 
 点 **+** 弹出的是一个菜单,不是输入框。菜单内容由服务端的 provider 提供,
@@ -98,6 +82,22 @@ cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 
 对外监听请自行保证网络层安全(Tailscale / 反向代理 + TLS)。
 
+## 桌面客户端(Windows / macOS)
+
+`octoterm-desktop` 把同一套 server 内嵌进一个托盘常驻进程,配一个小巧的原生
+设置窗口。它不是终端客户端——终端仍然长在浏览器里。
+
+```sh
+cargo run -p octoterm-desktop
+```
+
+在设置窗口里改监听地址或 token,只会重建 HTTP 层:**运行中的会话不受影响**。
+但已经打开的页面不会跟着迁移——它的 WebSocket 根本没断,会继续在旧地址上工作,
+直到你自己关掉那个页面;只有新连接才会走新地址。退出程序会终止所有会话,
+所以有会话在跑时会先弹确认框。
+
+不支持 Linux。
+
 ## 架构
 
 通信协议规范:[`docs/protocol.md`](docs/protocol.md) —— 线上格式的规范性定义,
@@ -107,6 +107,7 @@ cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 - `crates/protocol` — 帧与消息定义(协议唯一事实来源)
 - `crates/server` — daemon:pty、服务端 grid、WebSocket
 - `crates/client-core` — Rust 客户端复用逻辑
+- `crates/desktop` — 内嵌 server 的托盘常驻 GUI(Windows / macOS)
 - `clients/web` — 参考客户端(TS + xterm.js)
 
 ## 路线图
@@ -126,4 +127,4 @@ alt-screen 与滚动区域(DECSTBM);弱网重连后全屏应用建议 Ctrl-L 或
 
 ## 许可证
 
-[MIT](LICENSE)
+[MIT](LICENSE.md)

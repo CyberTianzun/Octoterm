@@ -27,7 +27,7 @@ jobs:
       - name: Rust tests
         shell: bash
         run: |
-          # desktop 只支持 Windows/macOS,Linux 上要装一堆 X11/Wayland dev 包才能编,不值得
+          # desktop 只支持 Windows/macOS:autostart.rs 里有 compile_error!,Linux 上装什么依赖都编不过
           if [ "${{ runner.os }}" = "Linux" ]; then
             cargo test --workspace --exclude octoterm-desktop
           else

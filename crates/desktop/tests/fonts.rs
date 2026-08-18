@@ -47,7 +47,7 @@ fn installing_makes_the_settings_labels_renderable() {
 
 #[test]
 #[cfg(any(target_os = "macos", windows))]
-fn latin_text_still_comes_from_the_default_font() {
+fn installing_does_not_lose_latin_glyphs() {
     // 中文字体是最低优先级的 fallback,不该把 ASCII 也接管过去 —— 真接管了这条
     // 测不出来(两边都有字形),但至少保证装了它之后英文数字没丢。
     let ctx = egui::Context::default();

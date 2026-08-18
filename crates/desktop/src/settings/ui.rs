@@ -104,8 +104,9 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
 
                     ui.label("");
                     ui.small(
-                        "留空表示不固定:不写进 config.toml,每次启动随机生成。\n\
-                     本次运行沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
+                        "框里显示的是当前生效的 token;直接保存会把它固定进 config.toml。\n\
+                     留空表示不固定:不写进 config.toml,每次启动随机生成 —— 本次运行\n\
+                     沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
                     );
                     ui.end_row();
 

@@ -65,25 +65,6 @@ command = ["ssh", "prod01"]   # argv, not a command line: no quoting rules to gu
 cwd = "~/work"                # optional
 ```
 
-## Desktop app (Windows / macOS)
-
-`octoterm-desktop` runs the same server embedded in a tray-resident process,
-with a small native settings window. It is not a terminal client — terminals
-still live in the browser.
-
-```sh
-cargo run -p octoterm-desktop
-```
-
-Changing the listen address or token from the settings window only rebuilds
-the HTTP layer: **your running sessions are not affected**. But a page you
-already have open does not get migrated — its WebSocket was never closed, so
-it keeps talking to the old address until you close it yourself; only new
-connections pick up the new one. Quitting the app does terminate every
-session, so it asks for confirmation first if any are running.
-
-Linux is not supported.
-
 ### The "new session" menu
 
 Clicking **+** opens a menu instead of a prompt. Its entries come from
@@ -113,6 +94,25 @@ cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 When exposing it beyond localhost, bring your own network-layer security
 (Tailscale / reverse proxy + TLS).
 
+## Desktop app (Windows / macOS)
+
+`octoterm-desktop` runs the same server embedded in a tray-resident process,
+with a small native settings window. It is not a terminal client — terminals
+still live in the browser.
+
+```sh
+cargo run -p octoterm-desktop
+```
+
+Changing the listen address or token from the settings window only rebuilds
+the HTTP layer: **your running sessions are not affected**. But a page you
+already have open does not get migrated — its WebSocket was never closed, so
+it keeps talking to the old address until you close it yourself; only new
+connections pick up the new one. Quitting the app does terminate every
+session, so it asks for confirmation first if any are running.
+
+Linux is not supported.
+
 ## Architecture
 
 Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative spec, and
@@ -122,6 +122,7 @@ the checklist any protocol change has to pass. Background and rationale:
 - `crates/protocol` — frame and message definitions (single source of truth)
 - `crates/server` — the daemon: pty hosting, server-side grid, WebSocket
 - `crates/client-core` — reusable logic for Rust clients
+- `crates/desktop` — tray-resident GUI with the server embedded (Windows / macOS)
 - `clients/web` — reference client (TypeScript + xterm.js)
 
 ## Roadmap
