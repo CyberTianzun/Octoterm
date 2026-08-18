@@ -4,10 +4,18 @@
 # 还会接管顶部菜单栏。
 set -euo pipefail
 
-TARGET="${1:-aarch64-apple-darwin}"
+# 默认值跟随本机架构:写死 aarch64 会让 Intel Mac 上的报错建议指向错误的 target
+case "$(uname -m)" in
+  arm64) HOST_TARGET="aarch64-apple-darwin" ;;
+  *)     HOST_TARGET="x86_64-apple-darwin" ;;
+esac
+TARGET="${1:-$HOST_TARGET}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/target/bundle/octoterm.app"
 BIN="$ROOT/target/$TARGET/release/octoterm-desktop"
+# 版本号只有一份事实来源:两处各写一个数字,升版本时必然忘掉其中一个
+VERSION="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$ROOT/crates/desktop/Cargo.toml" | head -1)"
+[ -n "$VERSION" ] || { echo "无法从 crates/desktop/Cargo.toml 读出 version" >&2; exit 1; }
 
 [ -f "$BIN" ] || { echo "找不到 $BIN,先跑 cargo build --release --target $TARGET -p octoterm-desktop" >&2; exit 1; }
 
@@ -15,7 +23,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/octoterm-desktop"
 
-cat > "$APP/Contents/Info.plist" <<'PLIST'
+cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -31,7 +39,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>$VERSION</string>
     <key>LSMinimumSystemVersion</key>
     <string>11.0</string>
     <key>LSUIElement</key>
