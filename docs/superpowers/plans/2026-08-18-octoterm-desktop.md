@@ -2509,7 +2509,9 @@ git commit -m "build(desktop): macOS .app 打包与发布产物"
 
 1. `cargo test --workspace` 在 macOS 与 Windows 上全绿;Linux 上 `--exclude octoterm-desktop` 全绿
 2. `cargo clippy --workspace -- -D warnings` 干净
-3. `crates/server` 除注释外零改动 —— 用 `git diff master -- crates/server/src` 确认
+3. `crates/server` 除注释、以及一个独立的 `collapsible_if` lint 修复提交外零改动
+   —— 用 `git diff master -- crates/server/src` 确认(那个 lint 提交是 rustc 1.95
+   对既有代码的新告警,与 desktop 无关,只是为了让 clippy 门禁真的能用)
 4. 改端口保存后,浏览器里的会话内容仍在
 5. 配置文件里手写的注释在保存后一字不差
 6. macOS 上 Dock 无图标、菜单栏图标随亮暗色反转
