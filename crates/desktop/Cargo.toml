@@ -28,6 +28,7 @@ open = "5"
 plist = "1"
 png = "0.18"
 pollster = "0.4"
+rfd = { version = "0.15", default-features = false }
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync"] }
 toml_edit = "0.25"
 tracing = "0.1"

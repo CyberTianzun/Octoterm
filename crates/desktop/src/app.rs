@@ -47,15 +47,28 @@ fn display_host(ip: IpAddr) -> String {
     }
 }
 
+/// 启动阶段的产物:配置本身,以及两条「起来了但没完全起来」的坏消息。
+///
+/// 这两个错误必须一路带到 GUI 里 —— 配置坏了 / 端口占用时 Web UI 是打不开的,
+/// 设置窗口是用户唯一能看到原因、并且动手修的地方。
+#[derive(Debug, Clone)]
+pub struct Startup {
+    pub config: Config,
+    /// `Config::load` 失败的原因;此时 `config` 是默认值。
+    pub config_error: Option<String>,
+    /// 启动时 `Supervisor::restart` 失败的原因。保存成功重新监听后会被清掉。
+    pub listen_error: Option<String>,
+}
+
 pub struct App {
     rt: Runtime,
     sup: Supervisor,
     tray: Option<Tray>,
     proxy: EventLoopProxy<UserEvent>,
     log_path: PathBuf,
-    /// 启动时读到的配置。这里只用它只读展示 window_size 与 [[launcher]] ——
-    /// 这两项设置界面不提供修改,改了也不会写回这个副本。
-    config: Config,
+    /// 启动阶段的产物:配置副本 + 启动失败原因。配置只做只读展示(window_size
+    /// 与 [[launcher]] 设置界面不提供修改,改了也不会写回这个副本)。
+    startup: Startup,
     /// 平时是 None——托盘常驻应用不该在后台挂着一个隐藏窗口和一整套 GPU 上下文。
     /// 点「设置…」时创建,关窗口时置回 None,`EguiWindow` 的 Drop 负责把 surface
     /// 和 device 还给系统。
@@ -70,7 +83,7 @@ impl App {
         sup: Supervisor,
         proxy: EventLoopProxy<UserEvent>,
         log_path: PathBuf,
-        config: Config,
+        startup: Startup,
     ) -> Self {
         Self {
             rt,
@@ -78,16 +91,28 @@ impl App {
             tray: None,
             proxy,
             log_path,
-            config,
+            startup,
             settings_window: None,
             view: None,
+        }
+    }
+
+    /// 启动时的致命状况合成的一条常驻横幅。它和 [`crate::settings::ui::View::message`]
+    /// 是两回事:横幅说的是「程序现在处于什么坏状态」,`message` 说的是「你刚点的
+    /// 这次保存结果如何」——后者随编辑清除,前者一直挂到状况被修好为止。
+    fn banner(&self) -> Option<String> {
+        match (&self.startup.config_error, &self.startup.listen_error) {
+            (Some(c), Some(l)) => Some(format!("配置文件有错:{c}\n监听失败:{l}")),
+            (Some(c), None) => Some(format!("配置文件有错(当前使用默认值):{c}")),
+            (None, Some(l)) => Some(format!("当前未监听:{l}")),
+            (None, None) => None,
         }
     }
 
     /// 打开设置窗口时,从当前生效值构造视图。
     fn build_view(&self) -> crate::settings::ui::View {
         use crate::settings::{state::Form, ui::View};
-        let listen = self.sup.listen().unwrap_or(self.config.listen);
+        let listen = self.sup.listen().unwrap_or(self.startup.config.listen);
         // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);
@@ -98,17 +123,20 @@ impl App {
             Some(t) => t.to_string(),
             None => String::new(),
         };
+        let banner = self.banner();
         View {
             form,
             // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
             // 里写的小写形式一一对应。
-            window_size: format!("{:?}", self.config.window_size).to_lowercase(),
+            window_size: format!("{:?}", self.startup.config.window_size).to_lowercase(),
             launchers: self
+                .startup
                 .config
                 .launchers
                 .iter()
                 .map(|l| (l.name.clone(), l.command.join(" ")))
                 .collect(),
+            banner,
             message: None,
         }
     }
@@ -131,6 +159,14 @@ impl App {
 
         let mut fx = AppEffects { rt: &self.rt, sup: &mut self.sup };
         let applied = apply(&form, &current, &mut fx);
+
+        // 重新监听成功了,启动时那条「未监听」就此作废。不清掉的话托盘状态行和
+        // 横幅会一直挂着一条已经不成立的错误(用户明明已经把端口改好了)。
+        // config_error 不能跟着清:配置文件仍然是坏的 —— `configfile::save` 靠
+        // toml_edit 解析原文,文件坏着的时候这次保存根本落不了盘。
+        if applied.restarted {
+            self.startup.listen_error = None;
+        }
 
         // 无条件刷新,不看 `applied.restarted`:restart 失败时它是 false,而
         // 「同地址只换 token」那条失败路径恰恰会让服务停在未监听状态(supervisor
@@ -155,7 +191,9 @@ impl App {
             view.form.token = token;
         }
 
+        let banner = self.banner();
         if let Some(view) = self.view.as_mut() {
+            view.banner = banner;
             view.message = Some(applied.message);
         }
     }
@@ -183,7 +221,12 @@ impl App {
                 let n = self.sup.manager().list().len();
                 format!("octoterm · {}:{} · {n} 个会话", display_host(addr.ip()), addr.port())
             }
-            None => "octoterm · 未监听".to_string(),
+            // 带上原因:托盘状态行是用户第一眼看到的东西,只说「未监听」等于
+            // 让他去翻日志。
+            None => match &self.startup.listen_error {
+                Some(e) => format!("octoterm · 未监听({e})"),
+                None => "octoterm · 未监听".to_string(),
+            },
         }
     }
 
@@ -208,6 +251,59 @@ impl App {
             }
         });
     }
+}
+
+/// 退出前的清理:**显式**杀掉每一个会话,再停掉 HTTP 层。
+///
+/// 不依赖 winit、不弹对话框,好让「退出会杀掉全部会话」这条能被测试直接验证。
+///
+/// ⚠️ 这个循环看着多余,其实一步都不能省 —— 靠 drop 是收不掉会话的:
+/// `Session` 没有 `Drop` 实现,而 pty 的读线程和 wait 线程各自握着一份
+/// `Arc<Session>`(见 `crates/server/src/session/pty.rs`),`Arc` 计数永远归不了
+/// 零,`Session::kill()` / `killer.kill()` 因此从来不会被调用。现在进程退出后
+/// 还能收拾干净,纯粹是靠 OS 关掉 pty master fd、内核给 slave 的前台进程组发
+/// SIGHUP —— 被 `nohup` / `disown` 的孙进程、或者干脆忽略 SIGHUP 的程序会原地
+/// 留成孤儿。只有走 `manager.kill(id)`(→ `Session::kill` → `killer.kill()` +
+/// `force_close_pty()`)才是真的杀。**别把这个循环删了。**
+pub fn shutdown(sup: &mut Supervisor) {
+    // 先把 id 收集出来再杀:`kill` 会改 manager 内部的 map,不能边遍历边改。
+    let ids: Vec<u64> = sup.manager().list().iter().map(|s| s.id).collect();
+    if !ids.is_empty() {
+        tracing::info!(count = ids.len(), "退出:正在终止全部会话");
+    }
+    for id in ids {
+        sup.manager().kill(id);
+    }
+    sup.stop();
+}
+
+/// 有活跃会话时确认;没有会话就别打扰用户。返回 true 表示「确认退出」。
+///
+/// 用系统原生对话框而不是再开一个 egui 窗口:退出确认必须能在设置窗口没开的
+/// 情况下弹出来,而且它是模态的 —— 借一个 winit 窗口反而要处理一堆生命周期。
+///
+/// 平台差异(rfd 0.15.4 实测,与 brief 的写法有出入):
+/// * macOS 无父窗口时走 `CFUserNotificationDisplayAlert`,自定义按钮文案生效,
+///   点第一个按钮返回 `Custom("退出")`;
+/// * Windows 在**没开** `common-controls-v6` 特性时,`OkCancelCustom` 会退化成
+///   普通的 `MessageBoxW(MB_OKCANCEL)`,按钮是系统本地化的「确定 / 取消」,返回的
+///   是 `MessageDialogResult::Ok` 而**不是** `Custom`。所以这里两种都认,只比
+///   `Custom` 的话 Windows 上会永远退不出去。
+///
+/// (没有开 `common-controls-v6` 是有意的:那条路径走 `TaskDialogIndirect`,它只
+/// 存在于 comctl32 v6,而要激活 v6 得给 exe 嵌一份 side-by-side 清单 —— 缺清单时
+/// 是**加载期**符号解析失败,整个程序起不来,代价远大于按钮上少两个汉字。)
+fn confirm_quit(sessions: usize) -> bool {
+    let result = rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Warning)
+        .set_title("退出 octoterm")
+        .set_description(format!(
+            "还有 {sessions} 个会话正在运行。退出会终止它们,里面跑的程序都会被杀掉。"
+        ))
+        .set_buttons(rfd::MessageButtons::OkCancelCustom("退出".into(), "取消".into()))
+        .show();
+    matches!(result, rfd::MessageDialogResult::Custom(ref s) if s == "退出")
+        || result == rfd::MessageDialogResult::Ok
 }
 
 /// [`crate::settings::save::Effects`] 的真实实现:保存流程要做的 IO 都在这儿。
@@ -260,6 +356,16 @@ impl ApplicationHandler<UserEvent> for App {
             }
             self.watch_sessions(self.sup.manager().clone());
             self.refresh_status();
+
+            // 起不来的时候必须主动把窗口推到用户面前:这时候 Web UI 是打不开的,
+            // 设置窗口是唯一的出路。
+            //
+            // 位置在 `self.tray.is_none()` 守卫**里面**:`resumed` 会被调用多次
+            // (macOS 上每次 activate 都可能来一发),放外面就变成每次回到前台
+            // 都弹一次设置窗口。
+            if self.startup.config_error.is_some() || self.startup.listen_error.is_some() {
+                self.proxy.send_event(UserEvent::MenuClicked(MenuAction::Settings)).ok();
+            }
         }
     }
 
@@ -308,7 +414,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::MenuClicked(MenuAction::Quit) => {
-                self.sup.stop();
+                // 「会话在断连后存活」正是这个项目的卖点,而内嵌模型下退出会把它们
+                // 全杀掉 —— 这一下必须显眼。没有会话时不打扰用户。
+                //
+                // 对话框是同步模态的,弹着的时候事件循环整个卡住:这是原生模态的
+                // 正常行为,退出确认本来也不该让用户还能去点别的菜单。
+                let n = self.sup.manager().list().len();
+                if n > 0 && !confirm_quit(n) {
+                    return;
+                }
+                shutdown(&mut self.sup);
                 event_loop.exit();
             }
         }

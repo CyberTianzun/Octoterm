@@ -29,6 +29,9 @@ pub struct View {
     pub window_size: String,
     /// (名称, 命令) —— 只读列表。
     pub launchers: Vec<(String, String)>,
+    /// 启动时的致命状况(配置解析失败 / 没监听上),常驻在窗口最顶上,直到状况
+    /// 被修好为止。和 `message` 不是一回事:后者只描述最近一次保存的结果。
+    pub banner: Option<String>,
     pub message: Option<Message>,
 }
 
@@ -41,18 +44,34 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
     egui::CentralPanel::default().show(ui, |ui| {
         ui.add_space(4.0);
 
+        if let Some(banner) = &view.banner {
+            ui.colored_label(ERR_COLOR, banner.as_str());
+            ui.add_space(6.0);
+        }
+
+        // 表单一被改动就把上一次的保存结果抹掉:保存成功后接着改端口,绿色的
+        // 「已生效 · …」还挂在那里,说的已经不是当前表单里这套值了。
+        // 纯赋值,不违反「同一帧可能跑两趟」的约束。
+        let mut edited = false;
+
         egui::Grid::new("settings").num_columns(2).spacing([12.0, 10.0]).show(ui, |ui| {
             ui.label("监听地址");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut view.form.host).desired_width(140.0));
+                edited |= ui
+                    .add(egui::TextEdit::singleline(&mut view.form.host).desired_width(140.0))
+                    .changed();
                 ui.label(":");
-                ui.add(egui::TextEdit::singleline(&mut view.form.port).desired_width(60.0));
+                edited |= ui
+                    .add(egui::TextEdit::singleline(&mut view.form.port).desired_width(60.0))
+                    .changed();
             });
             ui.end_row();
 
             ui.label("访问 token");
             ui.horizontal(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut view.form.token).desired_width(180.0));
+                edited |= ui
+                    .add(egui::TextEdit::singleline(&mut view.form.token).desired_width(180.0))
+                    .changed();
                 if ui.button("重新生成").clicked() {
                     outcome = Outcome::RegenerateToken;
                 }
@@ -74,7 +93,7 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
             ui.end_row();
 
             ui.label("开机自启");
-            ui.checkbox(&mut view.form.autostart, "");
+            edited |= ui.checkbox(&mut view.form.autostart, "").changed();
             ui.end_row();
         });
 
@@ -97,6 +116,11 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
                 });
             }
         });
+
+        // 「重新生成」也算改动:token 已经不是保存时那个了。
+        if edited || outcome == Outcome::RegenerateToken {
+            view.message = None;
+        }
 
         ui.add_space(8.0);
         if let Some(msg) = &view.message {
