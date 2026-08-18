@@ -1089,21 +1089,9 @@ fn a_path_with_an_ampersand_is_escaped() {
     assert!(!xml.contains("a&b"));
 }
 
-/// 真正读写系统状态的往返测试。会改动当前用户的登录项,跑完必须还原。
-#[test]
-fn enabling_then_disabling_round_trips() {
-    use octoterm_desktop::autostart;
-
-    let before = autostart::is_enabled().unwrap();
-
-    autostart::set(true).unwrap();
-    assert!(autostart::is_enabled().unwrap(), "启用后应当读到已启用");
-
-    autostart::set(false).unwrap();
-    assert!(!autostart::is_enabled().unwrap(), "禁用后应当读到未启用");
-
-    autostart::set(before).unwrap(); // 还原用户原本的状态
-}
+// 不写「启用→读回→禁用」的往返测试:它会真的改动当前用户的登录项
+// (~/Library/LaunchAgents 或 HKCU Run),测试中途 panic 就会把 octoterm 留在
+// 开机启动里。`is_enabled` / `set` 的真实读写由 Task 8 的手动验收覆盖。
 ```
 
 - [ ] **Step 3: 跑测试确认失败**
@@ -1236,7 +1224,7 @@ pub use imp::plist_xml;
 - [ ] **Step 5: 跑测试确认通过**
 
 Run: `cargo test -p octoterm-desktop --test autostart`
-Expected: macOS 上 3 passed,Windows 上 1 passed
+Expected: macOS 上 2 passed;Windows 上无适用测试(纯函数是 macOS 专有),autostart 的真实读写由 Task 8 手动验收覆盖
 
 - [ ] **Step 6: 提交**
 
