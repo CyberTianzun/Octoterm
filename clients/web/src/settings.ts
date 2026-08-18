@@ -359,10 +359,6 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       patch((c) => ({ ...c, ui: { ...c.ui, locale: lang.value as LocalePref } })),
     );
 
-    const follow = checkbox(cfg.ui.followThemeColors);
-    follow.addEventListener("change", () => {
-      patch((c) => ({ ...c, ui: { ...c.ui, followThemeColors: follow.checked } }));
-    });
     const prev = checkbox(cfg.ui.sidebarPreview);
     prev.addEventListener("change", () =>
       patch((c) => ({ ...c, ui: { ...c.ui, sidebarPreview: prev.checked } })),
@@ -374,7 +370,6 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
 
     wrap.append(
       row(t("settings.ui.language"), lang, t("settings.ui.languageHint")),
-      row(t("settings.ui.followTheme"), follow),
       row(t("settings.ui.sidebarPreview"), prev),
       row(t("settings.ui.webgl"), webgl, t("settings.ui.webglHint")),
     );

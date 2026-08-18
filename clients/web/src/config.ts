@@ -47,8 +47,6 @@ export interface OctoConfig {
   ui: {
     /** 界面语言。"auto" = 跟随浏览器,见 i18n.resolveLocale。 */
     locale: LocalePref;
-    /** 用主题色驱动整个界面(侧边栏等)的 CSS 变量,而不是只染终端那块。 */
-    followThemeColors: boolean;
     /** 侧边栏里的小终端预览。关掉能省掉每个会话一个 Terminal 实例。 */
     sidebarPreview: boolean;
     /** WebGL 渲染器。关掉回落到 DOM 渲染器。 */
@@ -104,7 +102,7 @@ export function defaultConfig(prefersDark = true): OctoConfig {
       minimumContrastRatio: 1,
       drawBoldTextInBrightColors: true,
     },
-    ui: { locale: "auto", followThemeColors: true, sidebarPreview: true, webgl: true },
+    ui: { locale: "auto", sidebarPreview: true, webgl: true },
   };
 }
 
@@ -254,7 +252,6 @@ function sanitizeRest(
     },
     ui: {
       locale: pick(u.locale, ["auto", ...LOCALES] as const, d.ui.locale, "ui.locale", warn),
-      followThemeColors: bool(u.followThemeColors, d.ui.followThemeColors, "ui.followThemeColors", warn),
       sidebarPreview: bool(u.sidebarPreview, d.ui.sidebarPreview, "ui.sidebarPreview", warn),
       webgl: bool(u.webgl, d.ui.webgl, "ui.webgl", warn),
     },

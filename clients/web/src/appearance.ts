@@ -120,14 +120,14 @@ export function deriveUiColors(theme: ITheme): UiColors | null {
 }
 
 /**
- * 应用(或撤销)界面配色。
+ * 应用界面配色。
  *
- * 只写 :root 的内联样式,不动 style.css —— 关掉开关时把这几个变量删掉就回到
- * 原样了,不需要维护一份「默认值」的副本。
+ * 只写 :root 的内联样式,不动 style.css —— 主题派生不出配色时(缺前景或背景)
+ * 把这几个变量删掉就回到原样了,不需要维护一份「默认值」的副本。
  */
 export function applyUiColors(cfg: OctoConfig): void {
   const root = document.documentElement.style;
-  const derived = cfg.ui.followThemeColors ? deriveUiColors(cfg.theme.colors) : null;
+  const derived = deriveUiColors(cfg.theme.colors);
   if (!derived) {
     for (const v of VARS) root.removeProperty(v);
     root.removeProperty("color-scheme");
