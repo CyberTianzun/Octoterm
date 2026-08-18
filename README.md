@@ -1,4 +1,4 @@
-# octoterm
+# Octoterm
 
 English | [中文](README-cnzh.md)
 
@@ -127,4 +127,4 @@ or an app-level redraw.
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE.md)
