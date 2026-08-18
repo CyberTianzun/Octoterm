@@ -70,7 +70,8 @@ fn default_path() -> Result<PathBuf> {
 }
 
 impl Config {
-    /// 只读加载,永不写文件:显式路径必须存在;缺省路径存在则读,不存在用默认值。
+    /// 只读加载,server 自己永不写文件(写是 octoterm-desktop 的职责):
+    /// 显式路径必须存在;缺省路径存在则读,不存在用默认值。
     pub fn load(path: Option<PathBuf>) -> Result<Config> {
         let path = match path {
             Some(p) => {

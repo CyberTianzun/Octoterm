@@ -25,6 +25,19 @@ jobs:
           npm run typecheck
           npm run build
       - name: Rust tests
-        run: cargo test --workspace
+        shell: bash
+        run: |
+          # desktop 只支持 Windows/macOS,Linux 上要装一堆 X11/Wayland dev 包才能编,不值得
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cargo test --workspace --exclude octoterm-desktop
+          else
+            cargo test --workspace
+          fi
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            cargo clippy --workspace --exclude octoterm-desktop -- -D warnings
+          else
+            cargo clippy --workspace -- -D warnings
+          fi

@@ -37,7 +37,7 @@ cargo run -p octoterm-server
 ```
 
 要固定 token(重启后旧页面免重新登录),用 `--token <值>`,或在配置文件里写
-`token = "<值>"`。配置文件不会自动生成;需要时自行创建
+`token = "<值>"`。配置文件不会由 server 自动生成;需要时自行创建
 `~/Library/Application Support/octoterm/config.toml`(Linux 为
 `~/.config/octoterm/config.toml`),或用 `--config <路径>` 指定,字段均可省略:
 
