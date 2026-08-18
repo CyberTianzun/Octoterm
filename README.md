@@ -65,6 +65,25 @@ command = ["ssh", "prod01"]   # argv, not a command line: no quoting rules to gu
 cwd = "~/work"                # optional
 ```
 
+## Desktop app (Windows / macOS)
+
+`octoterm-desktop` runs the same server embedded in a tray-resident process,
+with a small native settings window. It is not a terminal client — terminals
+still live in the browser.
+
+```sh
+cargo run -p octoterm-desktop
+```
+
+Changing the listen address or token from the settings window only rebuilds
+the HTTP layer: **your running sessions are not affected**. But a page you
+already have open does not get migrated — its WebSocket was never closed, so
+it keeps talking to the old address until you close it yourself; only new
+connections pick up the new one. Quitting the app does terminate every
+session, so it asks for confirmation first if any are running.
+
+Linux is not supported.
+
 ### The "new session" menu
 
 Clicking **+** opens a menu instead of a prompt. Its entries come from

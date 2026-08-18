@@ -61,6 +61,41 @@ jobs:
       - name: Build
         run: cargo build --release -p octoterm-server --target ${{ matrix.target }}
 
+      - name: Build desktop (windows/macos only)
+        if: matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'aarch64-apple-darwin'
+        run: cargo build --release --target ${{ matrix.target }} -p octoterm-desktop
+
+      - name: Bundle desktop (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          ./scripts/bundle-macos.sh ${{ matrix.target }}
+          cd target/bundle && zip -r octoterm-desktop-${{ matrix.target }}.zip octoterm.app
+
+      - name: Bundle desktop (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: cmd
+        run: scripts\bundle-windows.bat ${{ matrix.target }}
+
+      # 桌面产物的打包方式和上面 server 的 Package 步骤对称:unix 侧 shasum,
+      # windows 侧 Compress-Archive + Get-FileHash。server 的产物都落在仓库根
+      # 目录,下面既有的 action-gh-release files 通配符是按根目录匹配的(不会
+      # 递归进子目录),所以这里打完包也要挪到根目录,而不是留在 target/bundle/。
+      - name: Package desktop (macOS)
+        if: matrix.target == 'aarch64-apple-darwin'
+        shell: bash
+        run: |
+          name="octoterm-desktop-${{ matrix.target }}"
+          mv "target/bundle/${name}.zip" .
+          shasum -a 256 "${name}.zip" > "${name}.zip.sha256"
+
+      - name: Package desktop (Windows)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: pwsh
+        run: |
+          $name = "octoterm-desktop-${{ matrix.target }}"
+          Compress-Archive -Path "target/bundle/octoterm-desktop.exe" -DestinationPath "$name.zip"
+          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+
       - name: Package (unix)
         if: runner.os != 'Windows'
         shell: bash
