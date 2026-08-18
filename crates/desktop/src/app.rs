@@ -91,8 +91,13 @@ impl App {
         // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);
-        // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解
-        form.token = self.sup.token().unwrap_or_default().to_string();
+        // token 回填当前生效值:用户多半是来看它、复制它的,展示为空反而费解。
+        // 没在监听时压根没有「当前生效的 token」,框里就是空的(= 不固定)——
+        // 保存时 save.rs 会现场生成一个,不会拿空串去跑。
+        form.token = match self.sup.token() {
+            Some(t) => t.to_string(),
+            None => String::new(),
+        };
         View {
             form,
             // WindowSize 只有 Smallest / Largest / Latest 三个单词,和 config.toml
@@ -117,17 +122,21 @@ impl App {
         // 先把表单拷出来:下面要 &mut 借 self.sup,不能同时挂着 self.view 的借用。
         let form = view.form.clone();
         let current = Current {
+            // 没在监听时是 None 而不是空串:空串会一路被当成一个真 token 用,
+            // 而 server 侧 `token == state.token` 的比较对空串一律放行。
             listen: self.sup.listen(),
-            token: self.sup.token().unwrap_or_default().to_string(),
+            token: self.sup.token().map(str::to_string),
             sessions: self.sup.manager().list().len(),
         };
 
         let mut fx = AppEffects { rt: &self.rt, sup: &mut self.sup };
         let applied = apply(&form, &current, &mut fx);
 
-        if applied.restarted {
-            self.refresh_status();
-        }
+        // 无条件刷新,不看 `applied.restarted`:restart 失败时它是 false,而
+        // 「同地址只换 token」那条失败路径恰恰会让服务停在未监听状态(supervisor
+        // 已经先 stop() 了)——只在成功时刷新的话,状态行会一直挂着已经失效的
+        // 旧地址和会话数。刷新本身只是重读一次当前状态,多调用没有代价。
+        self.refresh_status();
         if let Some(view) = self.view.as_mut() {
             view.message = Some(applied.message);
         }
@@ -209,6 +218,11 @@ impl crate::settings::save::Effects for AppEffects<'_> {
         // 有意用 block_on 把 UI 线程卡住:换来的是保存流程完全串行、界面上不存在
         // 「正在保存」这种中间态。一次点击卡这一下(bind + spawn,毫秒级)可以接受。
         self.rt.block_on(self.sup.restart(listen, token))
+    }
+
+    fn new_token(&mut self) -> String {
+        // 和 server 的 resolve_token 用同一种格式(32 位无连字符十六进制)
+        uuid::Uuid::new_v4().simple().to_string()
     }
 }
 

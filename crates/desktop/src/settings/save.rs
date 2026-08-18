@@ -7,8 +7,18 @@
 //!
 //! 顺序是「先 restart、再写 config.toml」。设计文档写的是「先 bind、再写文件、再
 //! 切换」,但 [`crate::supervisor::Supervisor::restart`] 已经把 bind 与切换封成了
-//! 一步(地址有变化时它内部保证先 bind 后关),所以这里只剩两步,失败语义不变:
-//! restart 失败时什么都没动;写文件失败时如实告诉用户「跑起来了但没存下」。
+//! 一步(地址有变化时它内部保证先 bind 后关),所以这里只剩两步。
+//!
+//! 失败之后各步的善后**不一样**,不能一句「什么都没动」带过:
+//!
+//! - 校验失败:一个 IO 都没做。
+//! - 校验通过之后 **开机自启是第一个被改的**,后面任何一步失败它都已经生效了
+//!   (这是有意的:它和 HTTP 层无关,没有理由陪着一起回滚)。
+//! - `restart` 失败:配置文件肯定没写。但 HTTP 层的状态取决于地址有没有变 ——
+//!   地址有变化时旧的还在跑;地址没变(只换 token)时 supervisor 已经先 `stop()`
+//!   了,失败就停在「完全没有 HTTP 层」上。提示文案里必须把这一点说出来,调用方
+//!   也必须无条件刷新状态行。
+//! - 写文件失败:HTTP 层已经在新地址上跑起来了,如实告诉用户「跑起来了但没存下」。
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -19,13 +29,16 @@ use crate::configfile::Editable;
 use crate::settings::state::{needs_rebind, Form, Message};
 
 /// 保存要做的全部 IO。真实实现在 app.rs(改开机自启、找配置路径、写文件、
-/// 重启 HTTP 层),测试里换成记账用的假实现。
+/// 重启 HTTP 层、生成新 token),测试里换成记账用的假实现。
 pub trait Effects {
     fn set_autostart(&mut self, enabled: bool) -> Result<()>;
     fn config_path(&mut self) -> Result<PathBuf>;
     fn save_config(&mut self, path: &Path, edit: &Editable) -> Result<()>;
     /// 返回实际监听到的地址。
     fn restart(&mut self, listen: SocketAddr, token: String) -> Result<SocketAddr>;
+    /// 现场生成一个新的随机 token。格式与 `octoterm_server::config::resolve_token`
+    /// 一致(32 位无连字符十六进制)。**不允许返回空串。**
+    fn new_token(&mut self) -> String;
 }
 
 /// 点下「保存并应用」那一刻的现状快照。
@@ -33,8 +46,12 @@ pub trait Effects {
 pub struct Current {
     /// `None` = 当前没在监听(比如启动时端口就被占着)。
     pub listen: Option<SocketAddr>,
-    /// 当前生效的 token;没在监听时是空串。
-    pub token: String,
+    /// 当前生效的 token。`None` = 当前没在监听,压根不存在「生效的 token」。
+    ///
+    /// 刻意用 `Option` 而不是空串:空串是一个**合法但灾难性**的 token —— server
+    /// 侧鉴权是 `token == state.token` 的直接比较,两边都空就一律放行。用空串
+    /// 冒充「没有」,迟早会被当成一个真 token 送进 [`Effects::restart`]。
+    pub token: Option<String>,
     /// 当前会话数,只用来拼提示文案。
     pub sessions: usize,
 }
@@ -43,7 +60,11 @@ pub struct Current {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Applied {
     pub message: Message,
-    /// HTTP 层确实重启过 —— 调用方要刷新托盘状态行(监听地址可能变了)。
+    /// HTTP 层确实重启成功、并且在(可能是新的)地址上跑起来了。
+    ///
+    /// **不要拿它当「要不要刷新状态行」的开关**:`restart` 失败时它是 `false`,
+    /// 而同地址那条失败路径恰恰会让服务停在未监听状态 —— 状态行更需要刷新。
+    /// 调用方无条件刷新即可,这个字段只是给测试和日志用的事实描述。
     pub restarted: bool,
 }
 
@@ -60,31 +81,48 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
     };
 
     // 开机自启和 server 无关,单独处理。它失败就直接停下:用户勾的这一项没生效,
-    // 后面再报「已保存」就是在撒谎。
+    // 后面再报「已保存」就是在撒谎。反过来它**成功**之后就不再回滚了 —— 后面
+    // 任何一步失败,这一项都已经改掉了。
     if let Err(e) = fx.set_autostart(form.autostart) {
-        return Applied::err(format!("开机自启设置失败:{e}"));
+        return Applied::err(format!("开机自启设置失败:{e:#}"));
     }
 
     let path = match fx.config_path() {
         Ok(p) => p,
-        Err(e) => return Applied::err(e.to_string()),
+        Err(e) => return Applied::err(format!("{e:#}")),
     };
 
-    let rebind = match current.listen {
-        Some(listen) => needs_rebind(listen, &current.token, &next),
-        None => true, // 当前没在监听,无论如何都要试着起来
+    let rebind = match (current.listen, current.token.as_deref()) {
+        (Some(listen), Some(token)) => needs_rebind(listen, token, &next),
+        // 当前没在监听,无论如何都要试着起来
+        _ => true,
     };
 
     if !rebind {
         // 只改了 token 的固定与否 / 只改了自启:写文件就完事
         return match fx.save_config(&path, &next) {
             Ok(()) => Applied { message: Message::Ok("已保存".into()), restarted: false },
-            Err(e) => Applied::err(e.to_string()),
+            Err(e) => Applied::err(format!("{e:#}")),
         };
     }
 
-    // token 留空(不固定)时,本次运行继续用现有的 —— 只是不再写进 config.toml。
-    let token = next.token.clone().unwrap_or_else(|| current.token.clone());
+    // 送进 restart 的 token **必须非空**。server 侧鉴权(`bearer_ok` 与 WebSocket
+    // 握手)是 `token == state.token` 的直接比较,空 token 会让任何人凭
+    // `Authorization: Bearer ` 或 `Hello{token:""}` 进来 —— 等于整个鉴权关掉。
+    // 三级回退:
+    //   1. 表单填了(validate 保证非空)→ 用它;
+    //   2. 表单留空、当前有在跑 → 沿用现行 token(不然保存一下自己就被踢下线),
+    //      只是不再写进 config.toml;
+    //   3. 表单留空、当前压根没在监听(没有现行 token)→ 现场生成一个新的。
+    let token = match next.token.clone() {
+        Some(t) => t,
+        None => match current.token.clone() {
+            Some(t) if !t.is_empty() => t,
+            _ => fx.new_token(),
+        },
+    };
+    debug_assert!(!token.is_empty(), "空 token 会让 server 侧鉴权全部放行");
+
     match fx.restart(next.listen, token) {
         Ok(actual) => {
             let message = match fx.save_config(&path, &next) {
@@ -94,12 +132,20 @@ pub fn apply(form: &Form, current: &Current, fx: &mut impl Effects) -> Applied {
                 )),
                 // 已经在新地址上跑起来了,但配置没落盘 —— 必须说清楚
                 Err(e) => Message::Err(format!(
-                    "已在 {actual} 生效,但写入配置失败:{e}(重启后会回到旧配置)"
+                    "已在 {actual} 生效,但写入配置失败:{e:#}(重启后会回到旧配置)"
                 )),
             };
             Applied { message, restarted: true }
         }
-        // restart 失败:supervisor 保证地址有变化时旧的还在跑,这里什么都没动。
-        Err(e) => Applied::err(e.to_string()),
+        // restart 失败:配置文件没写,但 HTTP 层的现状要看走的是哪条路径,
+        // 见 `Supervisor::restart` 的文档。用户只看到一句 bind 失败的话,是判断
+        // 不出服务到底还在不在的。
+        Err(e) => Applied::err(match current.listen {
+            // 地址有变化:supervisor 先 bind 新的、成功了才关旧的,旧的还在跑
+            Some(old) if old != next.listen => format!("{e:#}(原服务仍在 {old} 上运行)"),
+            // 地址没变(只换 token):supervisor 已经先停了旧的,再失败就没有
+            // HTTP 层了;current.listen 为 None 时本来就没在监听
+            _ => format!("{e:#}(服务当前未监听)"),
+        }),
     }
 }

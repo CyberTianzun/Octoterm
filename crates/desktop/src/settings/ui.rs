@@ -60,7 +60,10 @@ pub fn draw(ui: &mut egui::Ui, view: &mut View) -> Outcome {
             ui.end_row();
 
             ui.label("");
-            ui.small("留空表示不固定:每次启动随机生成。改动在下次启动生效。");
+            ui.small(
+                "留空表示不固定:不写进 config.toml,每次启动随机生成。\n\
+                 本次运行沿用当前 token;若服务未在监听,保存时当场生成一个新的。",
+            );
             ui.end_row();
 
             ui.label("会话尺寸策略");
