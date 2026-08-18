@@ -94,8 +94,19 @@ impl Config {
 
 /// token 优先级:--token > 配置文件 > 每次启动新生成(Jupyter 式)。
 /// 返回 (token, 是否本次生成)。
+///
+/// **空白值等于没配**:`""` 和 `"   "` 一律当作 `None` 处理,顺着优先级往下走
+/// (`--token ""` 因此也不会盖掉配置文件里的好 token),最终落到随机生成那条路。
+/// 这是鉴权底线 —— 鉴权是 `token == state.token` 的字面比较(见 app.rs 的
+/// WebSocket 握手),空 token 生效就等于「空对空一律放行」,配上 `--host 0.0.0.0`
+/// 就是一个全网卡、无鉴权的终端服务。而空值恰恰是最容易写出来的:设置界面写着
+/// 「留空表示不固定」,配置文件里 `token = ""` 看着也像「不设 token」。
+///
+/// **前后空白会被去掉**:`token = "  abc  "` 的生效值是 `"abc"`。原样保留的话,
+/// 客户端几乎不可能把两端的空格一字不差地发上来,结果是个谁也连不上的 server。
 pub fn resolve_token(cli: Option<String>, config: Option<String>) -> (String, bool) {
-    match cli.or(config) {
+    let pick = |v: Option<String>| v.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+    match pick(cli).or_else(|| pick(config)) {
         Some(t) => (t, false),
         None => (uuid::Uuid::new_v4().simple().to_string(), true),
     }
@@ -195,5 +206,44 @@ mod tests {
         assert!(generated && !t1.is_empty());
         let (t2, _) = resolve_token(None, None);
         assert_ne!(t1, t2, "每次生成的 token 必须不同");
+    }
+
+    #[test]
+    fn blank_cli_token_does_not_shadow_config() {
+        // `--token ""` 不是「把 token 设成空」,而是「没给」—— 否则它会盖掉配置
+        // 文件里那个好 token,把 server 变成空对空放行。
+        assert_eq!(
+            resolve_token(Some(String::new()), Some("cfg".into())),
+            ("cfg".into(), false)
+        );
+        assert_eq!(
+            resolve_token(Some("   ".into()), Some("cfg".into())),
+            ("cfg".into(), false)
+        );
+    }
+
+    #[test]
+    fn blank_token_falls_back_to_generated() {
+        // 配置文件里 `token = ""` / `token = "   "` 等同于没配,走随机生成。
+        for blank in ["", "   ", "\t\n"] {
+            let (t, generated) = resolve_token(None, Some(blank.into()));
+            assert!(generated, "空白 token 必须回退到随机生成:{blank:?}");
+            assert!(!t.trim().is_empty());
+        }
+        let (t, generated) = resolve_token(Some("  ".into()), None);
+        assert!(generated && !t.trim().is_empty());
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_trimmed() {
+        // 生效值必须是 trim 过的:鉴权是字面比较,带空格的 token 客户端发不对。
+        assert_eq!(
+            resolve_token(None, Some("  abc  ".into())),
+            ("abc".into(), false)
+        );
+        assert_eq!(
+            resolve_token(Some("\tcli\n".into()), Some("cfg".into())),
+            ("cli".into(), false)
+        );
     }
 }

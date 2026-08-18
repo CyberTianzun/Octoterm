@@ -29,11 +29,12 @@ fn main() -> Result<()> {
             (Config::default(), Some(format!("{e:#}")))
         }
     };
-    // 空白 token 要在这里归一成「没配」:`resolve_token` 只区分 Some/None,
-    // config.toml 里写成 `token = ""` 会被它当作一个货真价实的 token 交出去,而
-    // server 侧鉴权是 `token == state.token` 的直接比较 —— 空对空一律放行。这条
-    // 路径很现实:设置界面写着「留空表示不固定」,旁边还有「打开 config.toml」
-    // 按钮把用户直接引到文件里。(过滤放在 desktop 侧,不动 server 的 resolve_token。)
+    // 冗余的第二道防线,不是唯一防线:`resolve_token` 现在自己就会把空白值归一成
+    // 「没配」并 trim 掉前后空白,单靠它已经足够。留着这一层是因为空 token 生效的
+    // 后果是全网卡无鉴权的终端(server 侧鉴权是 `token == state.token` 的字面比较,
+    // 空对空一律放行),而这条路径很现实:设置界面写着「留空表示不固定」,旁边还有
+    // 「打开 config.toml」按钮把用户直接引到文件里。同 `Supervisor::restart` 开头的
+    // `ensure!`,纵深防御。
     let (token, _) = octoterm_server::config::resolve_token(
         None,
         config.token.clone().filter(|t| !t.trim().is_empty()),
