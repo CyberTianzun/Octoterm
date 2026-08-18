@@ -13,6 +13,7 @@ use winit::window::WindowId;
 
 use crate::supervisor::Supervisor;
 use crate::tray::Tray;
+use crate::window::EguiWindow;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MenuAction {
@@ -49,6 +50,10 @@ pub struct App {
     tray: Option<Tray>,
     proxy: EventLoopProxy<UserEvent>,
     log_path: std::path::PathBuf,
+    /// 平时是 None——托盘常驻应用不该在后台挂着一个隐藏窗口和一整套 GPU 上下文。
+    /// 点「设置…」时创建,关窗口时置回 None,`EguiWindow` 的 Drop 负责把 surface
+    /// 和 device 还给系统。
+    settings_window: Option<EguiWindow>,
 }
 
 impl App {
@@ -58,7 +63,7 @@ impl App {
         proxy: EventLoopProxy<UserEvent>,
         log_path: std::path::PathBuf,
     ) -> Self {
-        Self { rt, sup, tray: None, proxy, log_path }
+        Self { rt, sup, tray: None, proxy, log_path, settings_window: None }
     }
 
     /// 带 token 的访问 URL,和 CLI 启动时打印的那一行是同一格式。
@@ -149,7 +154,17 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             UserEvent::MenuClicked(MenuAction::Settings) => {
-                tracing::info!("设置窗口尚未实现"); // Task 8 接上
+                if self.settings_window.is_none() {
+                    match EguiWindow::open(event_loop, "octoterm 设置", (460, 420)) {
+                        Ok(w) => self.settings_window = Some(w),
+                        Err(e) => tracing::error!(error = %e, "无法打开设置窗口"),
+                    }
+                }
+                // 窗口已经开着的话,这一下就当「把它叫到前面来」。
+                if let Some(w) = &self.settings_window {
+                    w.focus();
+                    w.request_redraw();
+                }
             }
             UserEvent::MenuClicked(MenuAction::Quit) => {
                 self.sup.stop();
@@ -158,7 +173,27 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
-    fn window_event(&mut self, _: &ActiveEventLoop, _: WindowId, _: WindowEvent) {
-        // Task 7 起有窗口了再处理
+    fn window_event(&mut self, _: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        let Some(w) = self.settings_window.as_mut().filter(|w| w.id() == id) else {
+            return;
+        };
+        // 先喂给 egui:它要靠这些事件维护自己的输入状态(按键、光标、缩放因子),
+        // 返回值说明它有没有把这个事件吃掉。这里我们只关心窗口生命周期,不用管。
+        let _consumed = w.on_window_event(&event);
+        match event {
+            WindowEvent::CloseRequested => {
+                // 关窗口只是关窗口,程序继续常驻。置 None 触发 Drop,GPU 资源当场
+                // 还回去——不是 set_visible(false) 那种「藏起来留着」。
+                self.settings_window = None;
+            }
+            WindowEvent::RedrawRequested => {
+                w.redraw_ui(|ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        ui.label("设置界面将在下一步实现");
+                    });
+                });
+            }
+            _ => w.request_redraw(),
+        }
     }
 }
