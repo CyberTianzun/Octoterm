@@ -85,7 +85,10 @@ fn main() -> Result<()> {
 
     let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
-    let listen_error = match rt.block_on(sup.restart(config.listen, token)) {
+    // 配置文件没写 listen 时用 desktop 自己的默认:全网卡。理由与前提见
+    // `octoterm_server::config::desktop_default_listen` 的文档注释。
+    let listen = config.listen.unwrap_or_else(octoterm_server::config::desktop_default_listen);
+    let listen_error = match rt.block_on(sup.restart(listen, token)) {
         Ok(addr) => {
             tracing::info!(%addr, "已监听");
             None

@@ -4,8 +4,31 @@ use std::path::PathBuf;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 
-fn default_listen() -> SocketAddr {
+/// `octoterm-server` 的默认监听:**只回环**。
+///
+/// 无头部署往往跑在别人的机器上、被别的东西转发,默认对外开是不礼貌也不安全的。
+/// 要对外用 `--host` 显式说出来。
+pub fn default_listen() -> SocketAddr {
     "127.0.0.1:7683".parse().unwrap()
+}
+
+/// `octoterm-desktop` 的默认监听:**全网卡**。
+///
+/// 和 server 不同是有意的。desktop 的存在理由就是「从手机/平板连回自己这台机器」——
+/// 默认只回环等于这个产品开箱即不可用,而绝大多数人不会去翻文档改配置。
+///
+/// 敢这么定的前提是两条硬边界都已经在了:
+///
+/// 1. **空 token 进不去**。desktop 里所有 token 都经过 `Supervisor::restart` 开头那个
+///    `ensure!`(release 构建也拦),所以「全网卡 + 无鉴权」在这条路径上结构性不可能;
+/// 2. **hook 面无条件只认回环**。`/hook/*` 看的是对端地址,主监听是不是 0.0.0.0 都一样
+///    —— 那条路上跑的是 `tool_input`(命令原文、文件路径),不对外开。
+///
+/// 剩下的残余风险是实打实的:同一局域网里的人只要拿到 token 就能用你的终端。
+/// 这和 README 里说的「越过 localhost 就自己带网络层安全」是同一件事,只是现在
+/// 默认值站在了「能用」这一边。用户可以在设置窗口里改回 127.0.0.1。
+pub fn desktop_default_listen() -> SocketAddr {
+    "0.0.0.0:7683".parse().unwrap()
 }
 
 /// 多个连接同时 attach 同一个会话时,pty 用谁的尺寸(tmux `window-size` 的语义)。
@@ -84,10 +107,12 @@ impl Default for AgentsConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_listen")]
-    pub listen: SocketAddr,
+    /// 配置文件里没写就是 `None` —— **「没指定」是个真实存在的状态**,不能在这一层
+    /// 塞一个默认值把它抹平:server 和 desktop 的默认监听本来就不一样,谁用谁定。
+    #[serde(default)]
+    pub listen: Option<SocketAddr>,
     #[serde(default)]
     pub token: Option<String>,
     #[serde(default)]
@@ -99,17 +124,6 @@ pub struct Config {
     pub agents: AgentsConfig,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            listen: default_listen(),
-            token: None,
-            window_size: WindowSize::default(),
-            launchers: Vec::new(),
-            agents: AgentsConfig::default(),
-        }
-    }
-}
 
 fn default_path() -> Result<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", "octoterm")
@@ -189,6 +203,24 @@ mod tests {
     #[test]
     fn no_overrides_keeps_config() {
         assert_eq!(effective_listen(base(), None, None), base());
+    }
+
+    /// 「配置文件里没写 listen」必须能和「写了 127.0.0.1」区分开 —— 两个二进制的
+    /// 默认值不一样,在 Config 这一层塞默认值就把这个区别抹平了。
+    #[test]
+    fn absent_listen_stays_absent() {
+        let cfg: Config = toml::from_str("").unwrap();
+        assert_eq!(cfg.listen, None);
+        let cfg: Config = toml::from_str(r#"listen = "127.0.0.1:1234""#).unwrap();
+        assert_eq!(cfg.listen, Some("127.0.0.1:1234".parse().unwrap()));
+    }
+
+    /// server 只回环、desktop 全网卡,这是刻意的差异,不是笔误。
+    #[test]
+    fn the_two_binaries_default_differently() {
+        assert!(default_listen().ip().is_loopback());
+        assert!(desktop_default_listen().ip().is_unspecified());
+        assert_eq!(default_listen().port(), desktop_default_listen().port());
     }
 
     #[test]

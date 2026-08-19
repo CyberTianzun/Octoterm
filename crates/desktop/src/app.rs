@@ -134,7 +134,9 @@ impl App {
     /// 打开设置窗口时,从当前生效值构造视图。
     fn build_view(&self) -> crate::settings::ui::View {
         use crate::settings::{state::Form, ui::View};
-        let listen = self.sup.listen().unwrap_or(self.startup.config.listen);
+        let listen = self.sup.listen().unwrap_or_else(|| {
+            self.startup.config.listen.unwrap_or_else(octoterm_server::config::desktop_default_listen)
+        });
         // 读不出来就当没开:这一项读失败不该阻止用户打开设置窗口
         let autostart = crate::autostart::is_enabled().unwrap_or(false);
         let mut form = Form::from_current(listen, autostart);

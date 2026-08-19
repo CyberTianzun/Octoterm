@@ -111,6 +111,15 @@ it keeps talking to the old address until you close it yourself; only new
 connections pick up the new one. Quitting the app does terminate every
 session, so it asks for confirmation first if any are running.
 
+**It listens on `0.0.0.0:7683` by default — unlike `octoterm-server`.** Reaching
+your machine from a phone or tablet is the whole point of the desktop app, and a
+loopback-only default makes it unusable out of the box. Two hard boundaries make
+that defensible: an empty token cannot reach the listener (enforced in release
+builds too), and `/hook/*` accepts loopback peers only, whatever the main listen
+address is. The residual risk is real — anyone on your LAN who has the token has
+your terminal — so on an untrusted network set it back to `127.0.0.1` in the
+settings window, or put your own network-layer security in front of it.
+
 Linux is not supported.
 
 ## Architecture

@@ -54,7 +54,9 @@ async fn main() -> anyhow::Result<()> {
         .init();
     let args = Args::parse();
     let config = Config::load(args.config)?;
-    let listen = octoterm_server::config::effective_listen(config.listen, args.host, args.port);
+    // 无头服务端的默认是只回环;desktop 有它自己的默认(见 config::desktop_default_listen)
+    let base = config.listen.unwrap_or_else(octoterm_server::config::default_listen);
+    let listen = octoterm_server::config::effective_listen(base, args.host, args.port);
     let (token, generated) = octoterm_server::config::resolve_token(args.token, config.token);
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
     let launchers = std::sync::Arc::new(octoterm_server::launcher::providers(&config.launchers));
