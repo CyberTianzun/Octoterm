@@ -11,6 +11,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 });
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
+  summarizePlan, fetchAgentPlan,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -91,4 +92,28 @@ test("回答请求带上 bearer 与自然键", async () => {
   assert.equal(seen.init.method, "POST");
   assert.equal(seen.init.headers.Authorization, "Bearer tok");
   assert.deepEqual(JSON.parse(seen.init.body), { pending_id: "p9", decision: "deny", message: "算了" });
+});
+
+test("预演按文件归并,一个文件一行,事件列在后面", () => {
+  const edits = [
+    { path: "/h/.claude/settings.json", action: "ensure", event: "Stop", spec: {} },
+    { path: "/h/.claude/settings.json", action: "ensure", event: "PreToolUse", spec: {} },
+  ];
+  assert.deepEqual(summarizePlan(edits), [
+    { path: "/h/.claude/settings.json", events: ["Stop", "PreToolUse"] },
+  ]);
+});
+
+test("预演拉不到时返回 null,让 UI 显示读不到而不是空白", async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 500 });
+  assert.equal(await fetchAgentPlan("tok", "claude-code"), null);
+  globalThis.fetch = async () => { throw new Error("offline"); };
+  assert.equal(await fetchAgentPlan("tok", "claude-code"), null);
+});
+
+test("agent id 进 URL 前要转义", async () => {
+  let seen;
+  globalThis.fetch = async (url) => { seen = url; return { ok: true, json: async () => ({}) }; };
+  await fetchAgentPlan("tok", "a/b c");
+  assert.equal(seen, "/api/agents/a%2Fb%20c/plan");
 });

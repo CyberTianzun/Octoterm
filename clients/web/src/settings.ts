@@ -18,7 +18,13 @@ import {
 } from "./config";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
-import { type AgentStatus, fetchAgents, setAgentIntegration } from "./agents";
+import {
+  type AgentStatus,
+  fetchAgentPlan,
+  fetchAgents,
+  setAgentIntegration,
+  summarizePlan,
+} from "./agents";
 
 export interface SettingsHost {
   get(): OctoConfig;
@@ -499,6 +505,38 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         const installed = a.integration !== "not-installed";
         const btn = el("button", "agent-act", installed ? t("agent.uninstall") : t("agent.install"));
         const status = el("span", "agent-status");
+
+        // 预演。和 install 走的是**同一份计划**,只是不落盘 —— 「先看后装」不是
+        // 另一条代码路径,而是同一条路径的干跑,所以看到的就是将要发生的。
+        const preview = el("div", "agent-preview");
+        preview.hidden = true;
+        const previewBtn = el("button", "agent-preview-btn", t("agent.preview"));
+        previewBtn.addEventListener("click", async () => {
+          if (!preview.hidden) {
+            preview.hidden = true;
+            previewBtn.textContent = t("agent.preview");
+            return;
+          }
+          previewBtn.disabled = true;
+          const plan = await fetchAgentPlan(host.token(), a.id);
+          previewBtn.disabled = false;
+          preview.innerHTML = "";
+          if (!plan) {
+            preview.append(el("div", "agent-status", t("agent.previewFailed")));
+          } else {
+            const edits = installed ? plan.uninstall : plan.install;
+            const label = installed ? t("agent.previewRemove") : t("agent.previewAdd");
+            if (!installed && !plan.include_blocking) {
+              preview.append(el("div", "agent-conflict", t("agent.previewTelemetryOnly")));
+            }
+            for (const g of summarizePlan(edits)) {
+              preview.append(el("div", "agent-path", g.path));
+              preview.append(el("div", "agent-events", `${label} ${g.events.join(", ")}`));
+            }
+          }
+          preview.hidden = false;
+          previewBtn.textContent = t("agent.previewHide");
+        });
         btn.addEventListener("click", async () => {
           btn.disabled = true;
           const outcome = await setAgentIntegration(host.token(), a.id, !installed);
@@ -511,8 +549,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
             outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
         });
         const acts = el("div", "agent-acts");
-        acts.append(btn, status);
-        card.append(acts);
+        acts.append(btn, previewBtn, status);
+        card.append(acts, preview);
         list.appendChild(card);
       }
     };

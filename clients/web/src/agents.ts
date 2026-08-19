@@ -219,3 +219,53 @@ export async function setAgentIntegration(
     return "failed";
   }
 }
+
+/** 一条将要发生的改动。`spec` 是要写进去的 hook 原文,预演时原样展示。 */
+export interface PlanEdit {
+  path: string;
+  action: "ensure" | "remove";
+  event: string;
+  spec: unknown;
+}
+
+export interface AgentPlan {
+  install: PlanEdit[];
+  uninstall: PlanEdit[];
+  /** 是否包含决策类 hook。检测到别家阻塞式 hook 时服务端会自动置 false */
+  include_blocking: boolean;
+  install_enabled: boolean;
+}
+
+/**
+ * 预演:装这一下到底会改什么。
+ *
+ * 这是只读的,和 install 走同一份计划 —— 「先看后装」不是另一条代码路径,而是
+ * 同一条路径的干跑。改的是**用户的**配置文件,不给看一眼就动手是不合适的。
+ */
+export async function fetchAgentPlan(token: string, id: string): Promise<AgentPlan | null> {
+  try {
+    const r = await fetch(`/api/agents/${encodeURIComponent(id)}/plan`, {
+      headers: authHeaders(token),
+    });
+    if (!r.ok) return null;
+    return (await r.json()) as AgentPlan;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 把计划压成给人看的几行:哪个文件、涉及哪些事件。
+ *
+ * 不展开 hook 的完整 JSON —— 那是给机器看的,一屏塞不下,而用户真正要判断的是
+ * 「你要动我哪个文件、动几处」。
+ */
+export function summarizePlan(edits: PlanEdit[]): { path: string; events: string[] }[] {
+  const byPath = new Map<string, string[]>();
+  for (const e of edits) {
+    const list = byPath.get(e.path) ?? [];
+    list.push(e.event);
+    byPath.set(e.path, list);
+  }
+  return [...byPath.entries()].map(([path, events]) => ({ path, events }));
+}

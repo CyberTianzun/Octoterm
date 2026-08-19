@@ -407,3 +407,13 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 .agent-conflict { color: #ffb020; font-size: 12px; margin-top: 4px; }
 .agent-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
 .agent-status { font-size: 12px; opacity: 0.85; }
+
+.agent-preview {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-left: 2px solid rgba(128, 128, 128, 0.4);
+  font-size: 12px;
+}
+/* 路径要能整条看清 —— 用户判断「你要动我哪个文件」全靠它,不省略 */
+.agent-path { font-family: monospace; word-break: break-all; opacity: 0.9; }
+.agent-events { opacity: 0.75; margin: 2px 0 6px; }

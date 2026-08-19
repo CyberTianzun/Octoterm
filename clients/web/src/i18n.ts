@@ -75,6 +75,12 @@ const zh = {
   "agent.installFailed": "操作失败",
   "agent.conflictNote": "检测到别的程序也在这个事件上挂了阻塞式 hook,只会安装状态上报部分",
   "agent.writeNote": "安装会修改这个 AI 自己的配置文件,改前会自动备份;卸载可完全还原",
+  "agent.preview": "看看会改什么",
+  "agent.previewHide": "收起",
+  "agent.previewFailed": "读不到预演结果",
+  "agent.previewAdd": "写入这些事件的 hook:",
+  "agent.previewRemove": "移除这些事件的 hook:",
+  "agent.previewTelemetryOnly": "只装状态上报,不装授权拦截(见上方冲突)",
   "session.empty": "还没有会话,点右上角 + 新建",
 
   /* ---------- 新建会话菜单 ---------- */
@@ -216,6 +222,12 @@ const en: Record<MsgKey, string> = {
   "agent.installFailed": "Operation failed",
   "agent.conflictNote": "Another program already has a blocking hook on this event; only status reporting will be installed",
   "agent.writeNote": "Installing edits the agent's own config file (backed up first); uninstalling restores it",
+  "agent.preview": "See what changes",
+  "agent.previewHide": "Hide",
+  "agent.previewFailed": "Could not load the preview",
+  "agent.previewAdd": "Hooks written for these events:",
+  "agent.previewRemove": "Hooks removed for these events:",
+  "agent.previewTelemetryOnly": "Status reporting only, no approval interception (see the conflict above)",
   "session.empty": "No sessions yet — use + above to start one",
 
   "ns.filter": "Filter…",
