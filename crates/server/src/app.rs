@@ -85,6 +85,11 @@ pub(crate) fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow::Result<()> {
     // 带上 ConnectInfo:`/hook/*` 要能看到对端地址,非回环一律拒收。主监听即使是
     // 0.0.0.0,hook 面也只认 127.0.0.1 —— 那条路上跑的是 tool_input,不能对外开。
+    state.agent_sessions.clone().start_sweeper(
+        state.manager.clone(),
+        state.agents.session_stale_secs,
+        state.agents.working_stale_secs,
+    );
     axum::serve(
         listener,
         router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),

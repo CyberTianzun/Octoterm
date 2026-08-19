@@ -7,7 +7,8 @@
 //! 里就观察到过 `-p` 模式下第一个到达的是 `UserPromptSubmit`。
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use octoterm_protocol::{AgentState, ServerMsg};
@@ -134,6 +135,57 @@ pub struct AgentSessionStore {
     sessions: Mutex<HashMap<(String, String), AgentSession>>,
     pending: Mutex<HashMap<String, PendingEntry>>,
     answered: Mutex<VecDeque<String>>,
+    sweeper_started: AtomicBool,
+}
+
+/// 对一个 agent 会话的清理判决。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Sweep {
+    /// 从表里删掉
+    Drop,
+    /// 状态显示成 idle。用于「卡在 working 上很久了」—— 它多半已经不在跑了,
+    /// 但还不到该删的程度。
+    MarkIdle,
+}
+
+/// 清理判决。**纯函数**:`now` 与「托管会话是否还活着」都由调用方给,
+/// 这里不读时钟、不查进程,于是可以逐条断言而不引入时间相关的 flaky。
+///
+/// 规则的顺序是有讲究的:
+///
+/// 1. **托管会话没了 ⇒ 立即删**。pty 子进程退出意味着里面的 agent 必死,这是比任何
+///    超时都硬的证据,所以排在一切时间判断之前。
+/// 2. **正在等人的一律不扫**。人可能在睡觉。挂起请求自己有超时(`pending_timeout_secs`),
+///    到点了会把 `pending` 摘掉,那时这条会话才重新进入清理的视野。
+/// 3. 空闲基准取 `max(updated_at, acked_at)` —— 用户刚看过一眼的会话不该因为
+///    「很久没有新事件」被扫掉。
+///
+/// 注意 `MarkIdle` **不刷新时间戳**。参考实现在这里踩过坑:刷新之后「超时转 idle」
+/// 会不断把删除的时刻往后推,结果那条会话永远删不掉。这里让两个时钟都从同一个
+/// 基准走,`MarkIdle` 只改显示,不续命。
+pub fn decide(
+    now: u64,
+    s: &AgentSession,
+    host_alive: bool,
+    session_stale_secs: u64,
+    working_stale_secs: u64,
+) -> Option<Sweep> {
+    if !host_alive {
+        return Some(Sweep::Drop);
+    }
+    if s.pending.is_some() {
+        return None;
+    }
+    let age = now.saturating_sub(s.updated_at.max(s.acked_at));
+    if age > session_stale_secs {
+        return Some(Sweep::Drop);
+    }
+    if age > working_stale_secs
+        && matches!(s.state, AgentState::Working | AgentState::Thinking)
+    {
+        return Some(Sweep::MarkIdle);
+    }
+    None
 }
 
 impl AgentSessionStore {
@@ -279,6 +331,73 @@ impl AgentSessionStore {
         v
     }
 
+    /// 跑一轮清理,返回需要广播出去的变化。
+    ///
+    /// `host_alive` 由调用方提供(问 `SessionManager` 那个托管会话还在不在)——
+    /// 保持这个模块不依赖 session 层。
+    pub fn sweep(
+        &self,
+        now: u64,
+        host_alive: &dyn Fn(u64) -> bool,
+        session_stale_secs: u64,
+        working_stale_secs: u64,
+    ) -> Vec<AgentSession> {
+        let mut changed = Vec::new();
+        let mut guard = self.sessions.lock().unwrap();
+        guard.retain(|_, s| {
+            let alive = s.session.map(host_alive).unwrap_or(true);
+            match decide(now, s, alive, session_stale_secs, working_stale_secs) {
+                Some(Sweep::Drop) => {
+                    let mut gone = s.clone();
+                    gone.state = AgentState::Done;
+                    gone.pending = None;
+                    changed.push(gone);
+                    false
+                }
+                Some(Sweep::MarkIdle) => {
+                    s.state = AgentState::Idle;
+                    // 刻意不动 updated_at:见 `decide` 的文档
+                    changed.push(s.clone());
+                    true
+                }
+                None => true,
+            }
+        });
+        changed
+    }
+
+    /// 起一个后台清理任务。**只会真正启动一次** —— desktop 重建 HTTP 层时
+    /// `serve()` 会再调一次,不能因此多出一个扫描器。
+    pub fn start_sweeper(
+        self: &Arc<Self>,
+        manager: Arc<crate::session::manager::SessionManager>,
+        session_stale_secs: u64,
+        working_stale_secs: u64,
+    ) {
+        if self.sweeper_started.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let store = Arc::downgrade(self);
+        tokio::spawn(async move {
+            // interval 的第一跳是**立即**触发的,而这个任务的首次轮询会被推迟到
+            // 运行时下一次调度 —— 于是「立即」有可能落在启动之后的任意一点,把刚
+            // 建好的会话当场扫掉。用 interval_at 把第一跳推到一个周期之后,启动
+            // 瞬间不做任何判断。
+            let period = std::time::Duration::from_secs(10);
+            let mut tick =
+                tokio::time::interval_at(tokio::time::Instant::now() + period, period);
+            loop {
+                tick.tick().await;
+                // store 没人要了就退出,不留悬空任务
+                let Some(store) = store.upgrade() else { break };
+                let alive = |id: u64| manager.get(id).is_some();
+                for s in store.sweep(now(), &alive, session_stale_secs, working_stale_secs) {
+                    manager.publish(s.to_msg());
+                }
+            }
+        });
+    }
+
     /// 托管会话没了 ⇒ 里面的 agent 必死。这是比任何超时都硬的证据。
     pub fn drop_by_session(&self, session: u64) -> Vec<AgentSession> {
         let mut guard = self.sessions.lock().unwrap();
@@ -294,5 +413,108 @@ impl AgentSessionStore {
             .collect();
         guard.retain(|_, s| s.session != Some(session));
         dead
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn session(state: AgentState, updated_at: u64) -> AgentSession {
+        AgentSession {
+            agent_id: "claude-code".into(),
+            agent_session_id: "s1".into(),
+            session: Some(1),
+            state,
+            detail: None,
+            cwd: None,
+            title: None,
+            pending: None,
+            updated_at,
+            acked_at: 0,
+        }
+    }
+
+    /// 托管会话没了是比任何超时都硬的证据,必须排在时间判断之前 —— 哪怕它刚刚
+    /// 才有过活动。
+    #[test]
+    fn dead_host_beats_every_timeout() {
+        let s = session(AgentState::Working, 1000);
+        assert_eq!(decide(1000, &s, false, 600, 300), Some(Sweep::Drop));
+    }
+
+    #[test]
+    fn fresh_session_is_left_alone() {
+        let s = session(AgentState::Working, 1000);
+        assert_eq!(decide(1010, &s, true, 600, 300), None);
+    }
+
+    /// 人可能在睡觉。挂起请求自己有超时,轮不到清理来替它做决定。
+    #[test]
+    fn waiting_for_a_human_is_never_swept() {
+        let mut s = session(AgentState::Waiting, 0);
+        s.pending = Some("p1".into());
+        assert_eq!(decide(99_999, &s, true, 600, 300), None);
+    }
+
+    #[test]
+    fn stuck_working_becomes_idle() {
+        let s = session(AgentState::Working, 0);
+        assert_eq!(decide(301, &s, true, 600, 300), Some(Sweep::MarkIdle));
+    }
+
+    /// idle 的会话不该被「卡住」规则碰,它只等 session_stale。
+    #[test]
+    fn idle_session_is_not_marked_again() {
+        let s = session(AgentState::Idle, 0);
+        assert_eq!(decide(301, &s, true, 600, 300), None);
+    }
+
+    #[test]
+    fn very_old_session_is_dropped() {
+        let s = session(AgentState::Idle, 0);
+        assert_eq!(decide(601, &s, true, 600, 300), Some(Sweep::Drop));
+    }
+
+    /// 用户点过「知道了」之后倒计时应当从那一刻重新开始。
+    #[test]
+    fn ack_extends_the_clock() {
+        let mut s = session(AgentState::Idle, 0);
+        s.acked_at = 600;
+        assert_eq!(decide(900, &s, true, 600, 300), None);
+        assert_eq!(decide(1201, &s, true, 600, 300), Some(Sweep::Drop));
+    }
+
+    /// `MarkIdle` 不刷新时间戳 —— 否则「超时转 idle」会把删除时刻不断往后推,
+    /// 那条会话永远删不掉(参考实现踩过的坑)。
+    #[test]
+    fn mark_idle_does_not_extend_life() {
+        let store = AgentSessionStore::new();
+        store.apply(
+            "claude-code",
+            "s1",
+            Some(1),
+            Update { state: Some(AgentState::Working), ..Default::default() },
+        );
+        let before = store.list()[0].updated_at;
+        let changed = store.sweep(before + 301, &|_| true, 600, 300);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(store.list()[0].state, AgentState::Idle);
+        assert_eq!(store.list()[0].updated_at, before, "MarkIdle 不该续命");
+        // 再走到 session_stale,必须能被删掉
+        let changed = store.sweep(before + 601, &|_| true, 600, 300);
+        assert_eq!(changed.len(), 1);
+        assert!(store.list().is_empty(), "转成 idle 之后仍然必须能被删掉");
+    }
+
+    #[test]
+    fn sweep_drops_sessions_whose_host_is_gone() {
+        let store = AgentSessionStore::new();
+        store.apply("claude-code", "s1", Some(7), Update::default());
+        let changed = store.sweep(now(), &|_| false, 600, 300);
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].state, AgentState::Done);
+        assert!(store.list().is_empty());
     }
 }
