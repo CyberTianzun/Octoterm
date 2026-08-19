@@ -9,3 +9,6 @@ clients/web/test/.builtin.build.mjs
 .superpowers/
 clients/web/test/.launchers.build.mjs
 clients/web/test/.i18n.build.mjs
+
+.DS_Store
+
