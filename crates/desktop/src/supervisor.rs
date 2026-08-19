@@ -32,6 +32,9 @@ pub struct Supervisor {
     launchers: Arc<Vec<Box<dyn LauncherProvider>>>,
     /// `[agents]` 配置。装 hook 的门控在这里,重建 HTTP 层时原样带过去。
     agents: octoterm_server::config::AgentsConfig,
+    /// agent 会话表由 Supervisor 长期持有 —— 重建 HTTP 层不该把它清空,
+    /// 就像 SessionManager 一样。
+    agent_sessions: Arc<octoterm_server::agent::store::AgentSessionStore>,
     running: Option<Running>,
 }
 
@@ -46,6 +49,7 @@ impl Supervisor {
             manager: SessionManager::new(buffer_cap, window_size),
             launchers: Arc::new(octoterm_server::launcher::providers(specs)),
             agents,
+            agent_sessions: Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
             running: None,
         }
     }
@@ -120,6 +124,7 @@ impl Supervisor {
             launchers: self.launchers.clone(),
             listen_port: actual.port(),
             agents: self.agents,
+            agent_sessions: self.agent_sessions.clone(),
         };
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {

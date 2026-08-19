@@ -15,7 +15,9 @@ use std::path::PathBuf;
 
 use super::detect::{self, DetectEnv};
 use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
+use super::store::Update;
 use super::{AgentAdapter, Confidence, Detected, Integration};
+use octoterm_protocol::AgentState;
 
 pub struct ClaudeCode;
 
@@ -160,6 +162,23 @@ impl AgentAdapter for ClaudeCode {
             .collect())
     }
 
+    fn parse(&self, event: &str, body: &Value) -> Option<Update> {
+        let state = state_of(event)?;
+        let detail = match event {
+            "PreToolUse" | "PostToolUse" => str_field(body, "tool_name"),
+            // notification_type 就是 matcher 的取值:permission_prompt / idle_prompt /
+            // agent_needs_input / elicitation_dialog ...
+            "Notification" => str_field(body, "notification_type").or(Some("需要你的输入".into())),
+            _ => None,
+        };
+        Some(Update {
+            state: Some(state),
+            detail,
+            cwd: str_field(body, "cwd"),
+            title: str_field(body, "session_title"),
+        })
+    }
+
     fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {
         let Some(doc) = read_settings(&settings_path(&ctx.home)) else {
             return (Integration::NotInstalled, Vec::new());
@@ -191,6 +210,28 @@ impl AgentAdapter for ClaudeCode {
         };
         (state, conflicts)
     }
+}
+
+/// 事件 → 状态。
+///
+/// `Stop` 映射成 `Idle` 而不是「等你」:一个回合结束不等于它要你做什么。真正的
+/// 「在等人」只从 `Notification` 来(它的 matcher 里有 `permission_prompt` /
+/// `idle_prompt` / `agent_needs_input`),以及 Task 6 接上的挂起请求。这样
+/// `Waiting` 才是个有信息量的状态,而不是每轮都亮一次的噪声。
+fn state_of(event: &str) -> Option<AgentState> {
+    Some(match event {
+        "SessionStart" => AgentState::Idle,
+        "SessionEnd" => AgentState::Done,
+        "UserPromptSubmit" => AgentState::Thinking,
+        "PreToolUse" | "PostToolUse" => AgentState::Working,
+        "Stop" => AgentState::Idle,
+        "Notification" => AgentState::Waiting,
+        _ => return None,
+    })
+}
+
+fn str_field(body: &Value, key: &str) -> Option<String> {
+    body.get(key).and_then(Value::as_str).map(str::to_string)
 }
 
 /// 我方形状但端口对不上 —— 用来识别「改过监听端口之后的残留」。

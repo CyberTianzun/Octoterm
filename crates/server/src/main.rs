@@ -56,5 +56,6 @@ async fn main() -> anyhow::Result<()> {
     }
     let listen_port = listener.local_addr()?.port();
     let agents = config.agents;
-    serve(listener, AppState { manager, token, launchers, listen_port, agents }).await
+    let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
+    serve(listener, AppState { manager, token, launchers, listen_port, agents, agent_sessions }).await
 }

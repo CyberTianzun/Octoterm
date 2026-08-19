@@ -25,6 +25,8 @@ pub struct AppState {
     pub listen_port: u16,
     /// `[agents]` 配置。装 hook 的门控就在这里,默认关。
     pub agents: crate::config::AgentsConfig,
+    /// agent 会话表。内存态,与 HTTP 层的生死无关(desktop 重建 HTTP 层时要沿用同一个)。
+    pub agent_sessions: Arc<crate::agent::store::AgentSessionStore>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -35,6 +37,13 @@ pub fn router(state: AppState) -> Router {
         .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))
         .route("/api/agents/{id}/uninstall", post(crate::agent::routes::uninstall))
+        .route("/api/agents/sessions", get(crate::agent::routes::sessions))
+        .route(
+            "/hook/{agent}/{event}",
+            post(crate::agent::routes::hook)
+                // hook payload 里有 tool_input(命令原文、文件路径),给它一个明确上界
+                .layer(axum::extract::DefaultBodyLimit::max(512 * 1024)),
+        )
         .fallback(crate::assets::static_handler)
         .with_state(state)
 }
@@ -72,7 +81,13 @@ pub(crate) fn bearer_ok(headers: &HeaderMap, token: &str) -> bool {
 }
 
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow::Result<()> {
-    axum::serve(listener, router(state)).await?;
+    // 带上 ConnectInfo:`/hook/*` 要能看到对端地址,非回环一律拒收。主监听即使是
+    // 0.0.0.0,hook 面也只认 127.0.0.1 —— 那条路上跑的是 tool_input,不能对外开。
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 

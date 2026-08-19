@@ -1,13 +1,78 @@
 [
-  { "type": "hello-ok", "proto": 1 },
-  { "type": "error", "message": "bad token" },
-  { "type": "error", "message": "no such session", "channel": 5 },
-  { "type": "sessions", "sessions": [ { "id": 1, "name": "work", "cols": 80, "rows": 24, "created_at": 1755300000 } ] },
-  { "type": "session-event", "event": "created", "session": { "id": 2, "name": "octoterm-2", "cols": 80, "rows": 24, "created_at": 1755300001 } },
-  { "type": "preview-data", "id": 1, "data": "G1swbQ==" },
-  { "type": "attached", "channel": 1, "seq": 100, "mode": "replay" },
-  { "type": "resized", "channel": 1, "cols": 80, "rows": 24 },
-  { "type": "resync-begin", "channel": 1 },
-  { "type": "resync-end", "channel": 1, "seq": 200 },
-  { "type": "session-exited", "channel": 1, "id": 1 }
+  {
+    "type": "hello-ok",
+    "proto": 1
+  },
+  {
+    "type": "error",
+    "message": "bad token"
+  },
+  {
+    "type": "error",
+    "message": "no such session",
+    "channel": 5
+  },
+  {
+    "type": "sessions",
+    "sessions": [
+      {
+        "id": 1,
+        "name": "work",
+        "cols": 80,
+        "rows": 24,
+        "created_at": 1755300000
+      }
+    ]
+  },
+  {
+    "type": "session-event",
+    "event": "created",
+    "session": {
+      "id": 2,
+      "name": "octoterm-2",
+      "cols": 80,
+      "rows": 24,
+      "created_at": 1755300001
+    }
+  },
+  {
+    "type": "preview-data",
+    "id": 1,
+    "data": "G1swbQ=="
+  },
+  {
+    "type": "attached",
+    "channel": 1,
+    "seq": 100,
+    "mode": "replay"
+  },
+  {
+    "type": "resized",
+    "channel": 1,
+    "cols": 80,
+    "rows": 24
+  },
+  {
+    "type": "resync-begin",
+    "channel": 1
+  },
+  {
+    "type": "resync-end",
+    "channel": 1,
+    "seq": 200
+  },
+  {
+    "type": "session-exited",
+    "channel": 1,
+    "id": 1
+  },
+  {
+    "type": "agent-event",
+    "agent_id": "claude-code",
+    "agent_session_id": "9f3a1c22-0e5b-4a77-9a1e-5c2b8d6f0011",
+    "session": 3,
+    "state": "waiting",
+    "pending": "pnd_01H9",
+    "detail": "等待授权:Bash"
+  }
 ]

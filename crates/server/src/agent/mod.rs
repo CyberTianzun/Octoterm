@@ -17,6 +17,7 @@ pub mod claude_code;
 pub mod detect;
 pub mod edit;
 pub mod routes;
+pub mod store;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -77,6 +78,12 @@ pub trait AgentAdapter: Send + Sync {
 
     /// 只读地看一眼当前集成状态。读不到 / 读坏了一律当作没装。
     fn integration(&self, ctx: &edit::InstallCtx) -> (Integration, Vec<String>);
+
+    /// 把 agent 方言的 hook payload 归一化成统一更新。
+    ///
+    /// **不认识的事件返回 `None`,当作忽略而不是错误** —— agent 升级会带来新事件,
+    /// 不能因为多了一个事件名就 500,更不能因此把 Claude 卡住。
+    fn parse(&self, event: &str, body: &serde_json::Value) -> Option<store::Update>;
 }
 
 pub fn registry() -> Vec<Box<dyn AgentAdapter>> {

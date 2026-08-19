@@ -563,7 +563,7 @@ working_stale_secs = 300
 - Modify: `docs/protocol.md`(新增 agent 一节 + §10 限额 + §12.1 复用表补一行)
 - Modify: `clients/web/src/protocol.ts`(如需要)
 
-- [ ] **Step 1: 加消息类型**
+- [x] **Step 1: 加消息类型**
 
 ```rust
 /// agent 集成的状态广播。**只描述状态,不含任何窗口/标签/面板语义**(R13):
@@ -583,15 +583,15 @@ AgentEvent {
 
 `AgentState` 是 `idle | thinking | working | waiting | done | error`,kebab-case。
 
-- [ ] **Step 2: 更新 fixtures 并让 roundtrip 测试通过**
+- [x] **Step 2: 更新 fixtures 并让 roundtrip 测试通过**
 
 `messages.rs` 里现成的 `fixtures_roundtrip` 测试会自动覆盖新类型 —— 前提是把样例加进 `server-msgs.json`。
 
-- [ ] **Step 3: 文档**
+- [x] **Step 3: 文档**
 
 `docs/protocol.md` 新增一节,内容至少包含:消息形状、何时广播、限额(≤ 4 KiB)、以及 §12.2 的 R1–R13 应答(spec 里已经写好,搬过来并落成正式规则 ID)。§12.1 的「复用优先」表补一行,免得下一个人重复问「为什么不用 session-event」。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 `cargo test -p octoterm-protocol` 全绿。**特别确认 `PROTO_VERSION` 没被改动** —— 这是本 task 最容易手滑的地方。
 
@@ -609,7 +609,7 @@ AgentEvent {
   - `POST /hook/{agent}/{event}`
   - `store::{AgentSessionStore, AgentEvent, AgentState}`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[test] fn 没有_authorization_头一律_401() {}
@@ -620,7 +620,7 @@ AgentEvent {
 #[test] fn 未知事件名被忽略而不是报错() {}   // agent 升级会带来新事件,不能因此 500
 ```
 
-- [ ] **Step 2: env 注入**
+- [x] **Step 2: env 注入**
 
 `pty.rs` 的 `spawn` 里,紧挨着现有的 `TERM` / `COLORTERM`:
 
@@ -631,7 +631,7 @@ cmd.env("OCTOTERM_HOOK_TOKEN", hook_token);
 
 `hook_token` 由 `AppState` 在**进程启动时随机生成一次**并传进来,不落盘、不轮换(见 spec:环境变量就是能力本身)。`Session::spawn` 的签名要多带一个参数,`SessionManager` 一路透传。
 
-- [ ] **Step 3: 摄入路由**
+- [x] **Step 3: 摄入路由**
 
 `POST /hook/{agent}/{event}`:
 
@@ -643,11 +643,55 @@ cmd.env("OCTOTERM_HOOK_TOKEN", hook_token);
 
 **只绑 127.0.0.1**:路由层判定 `ConnectInfo` 的对端地址,非回环直接 403。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 集成测试全绿。手工:在 octoterm 里开一个会话跑 `claude`,`GET /api/agents` 能看到它,状态随敲字/跑工具变化。
 
 ---
+
+
+---
+
+## 实施记录:Task 4 / Task 5(2026-08-19,已完成)
+
+`agent_hook` 10 个用例,`cargo test --workspace` 232 通过 0 失败,clippy 干净。
+**`PROTO_VERSION` 仍是 1**。
+
+**广播通路是白捡的**:`conn.rs` 里那个事件转发循环把 `manager.events()` 收到的
+**任何** `ServerMsg` 转给所有连接。给 `SessionManager` 加一个 `publish()` 就够了,
+`conn.rs` 一行没改。
+
+**鉴权是两套凭据、两个信任域**,有专门的回归测试
+(`client_token_does_not_work_on_hook_plane`):客户端那个 bearer token 打不动 hook 面,
+反之亦然。hook 密钥是进程级 `OnceLock`,不落盘 —— 因为写进 `settings.json` 的是字面量
+`$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发那一刻、取自会话的环境。
+
+**`/hook/*` 只认回环**:`serve()` 改用 `into_make_service_with_connect_info`,handler
+拿到对端地址,非回环直接 403 —— 主监听是不是 `0.0.0.0` 都一样。那条路上跑的是
+`tool_input`(命令原文、文件路径)。
+
+**状态映射的一个取舍**:`Stop` 映射成 `Idle` 而不是「等你」。一个回合结束不等于它要你
+做什么;真正的 `Waiting` 只从 `Notification` 来(matcher 里有 `permission_prompt` /
+`idle_prompt` / `agent_needs_input`),以及 Task 6 的挂起请求。这样 `Waiting` 才有信息量,
+而不是每轮都亮一次的噪声。
+
+**兑现了 Task 3 留下的提示**:不假设 `SessionStart` 先到,任何事件都能惰性建出会话,
+有专门用例 `any_event_can_create_the_session`。另外「只带 tool_name 的事件不该把 cwd
+抹掉」也单独测了。
+
+**未知事件返回 200 而不是 4xx**:agent 升级会带来新事件,不能因为多一个事件名就报错,
+更不能把 Claude 卡住。
+
+**补做了 Task 3 漏掉的一步**:Step 6 的两处注释当时勾了但没真改。现在改了 ——
+`launcher/mod.rs` 的「只读是硬约束」限定到**发现**这个作用域,`config.rs` 的「server 永不
+写文件」改成「自己的 config.toml 只读;唯一会写的是 agent 集成改的别人的配置」。
+`docs/protocol.md` 的来源地图也补了 agent 模块两行。
+
+**协议文档**:T10 拆成只读子集 + `T10a` 变更子集;T13 路由表补 5 行;§6.2 消息表补
+`agent-event`;§10 补两条限额;§12.1 复用表补一行(说明为什么不是 `session-event`);
+新增 §15「Agent integration [A]」8 条规则。其中 A8 明确划界:**server↔agent 那一侧
+(装 hook、`/hook/*` 摄入)不属于本文档** —— 它不在客户端与 octoterm 之间的线上,
+客户端既看不见也不依赖它。
 
 ### Task 6: 阻塞决策与回答路由
 

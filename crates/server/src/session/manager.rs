@@ -34,6 +34,12 @@ impl SessionManager {
         self.events.subscribe()
     }
 
+    /// 往会话事件广播里塞一条消息。agent 集成用它把 `AgentEvent` 推给所有客户端 ——
+    /// 复用同一条通路,`conn.rs` 那边一行都不用改。
+    pub fn publish(&self, msg: ServerMsg) {
+        let _ = self.events.send(msg);
+    }
+
     fn emit(&self, event: SessionEventKind, session: SessionInfo) {
         let _ = self.events.send(ServerMsg::SessionEvent { event, session });
     }

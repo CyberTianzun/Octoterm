@@ -106,7 +106,9 @@ fn default_path() -> Result<PathBuf> {
 }
 
 impl Config {
-    /// 只读加载,server 自己永不写文件(写是 octoterm-desktop 的职责):
+    /// 只读加载:**自己的** config.toml 由 octoterm-desktop 写,server 只读。
+    /// (server 唯一会写的是 agent 集成装 hook 时改的**别人的**配置文件,受
+    /// `agents.install_enabled` 门控,见 `crate::agent::apply`。)
     /// 显式路径必须存在;缺省路径存在则读,不存在用默认值。
     pub fn load(path: Option<PathBuf>) -> Result<Config> {
         let path = match path {

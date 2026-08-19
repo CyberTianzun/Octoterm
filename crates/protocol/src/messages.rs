@@ -16,6 +16,23 @@ pub enum AttachMode {
     Resync,
 }
 
+/// 一个 agent 会话此刻在干什么。
+///
+/// 刻意只有六档 —— 它要驱动的是「列表上一个状态点」和「有没有人在等你」,不是
+/// 一套动画。参考实现 clawd-on-desk 有十一档,那是桌宠的需要,对客户端中立的
+/// 协议是负担(R13)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentState {
+    Idle,
+    Thinking,
+    Working,
+    /// **在等人**。这是整条链路里唯一必须精确的状态:客户端的「有事找你」全靠它。
+    Waiting,
+    Done,
+    Error,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum SessionEventKind {
@@ -81,6 +98,30 @@ pub enum ServerMsg {
     /// 客户端收到本消息后应把 `last_seq` 直接置为 `seq`,此后按数据帧字节长度累加。
     ResyncEnd { channel: u32, seq: u64 },
     SessionExited { channel: u32, id: u64 },
+    /// 托管会话里的 coding agent 状态变了。
+    ///
+    /// 走 server→client 的新消息类型是兼容的(X2:客户端忽略未知 type),因此**不需要
+    /// bump proto**。反方向(客户端回答一个 pending)刻意不走控制消息,而是
+    /// `POST /api/agents/answer` —— 新增 client→server 类型按 X3 是破坏性变更,
+    /// 为一个低频请求付「所有已打开页面全断」的代价不值。
+    ///
+    /// 只描述状态,不含任何窗口/标签/面板语义(R13):怎么渲染是客户端的事。
+    AgentEvent {
+        agent_id: String,
+        /// agent 自己的会话标识(它在 hook payload 里给的 `session_id`)
+        agent_session_id: String,
+        /// 关联到的 octoterm 托管会话。目前恒有值 —— 拿不到关联的 hook 在鉴权那一层
+        /// 就被挡掉了;留成 Option 是为了将来支持非托管会话时不必 bump proto(X4)。
+        #[serde(default)]
+        session: Option<u64>,
+        state: AgentState,
+        /// 有值表示正在等人回答,值是 `POST /api/agents/answer` 的自然键(C5/R5)。
+        #[serde(default)]
+        pending: Option<String>,
+        /// 一行给人看的说明(在等什么/在跑什么工具)。展示用,客户端不解析。
+        #[serde(default)]
+        detail: Option<String>,
+    },
 }
 
 #[cfg(test)]

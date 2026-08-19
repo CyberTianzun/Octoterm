@@ -34,6 +34,8 @@ scope:         everything on the wire between a client and octoterm-server
 | client resume logic | `crates/client-core/src/lib.rs`, `clients/web/src/client.ts` |
 | protocol integration tests | `crates/server/tests/ws_{auth,control,attach,geometry}.rs` |
 | side-channel integration tests | `crates/server/tests/http_launchers.rs` |
+| agent integration (server side) | `crates/server/src/agent/` |
+| agent integration tests | `crates/server/tests/agent_{detect,edit,install,hook}.rs` |
 
 ## 2. Transport [T]
 
@@ -70,9 +72,17 @@ scope:         everything on the wire between a client and octoterm-server
   The header, not a query parameter: query strings leak into logs and history,
   and requiring a header means the request must come from script, which keeps
   cross-site `<form>`/`<img>` requests out.
-- **T10** These routes are **stateless and idempotent**: `GET` only, safe to
-  repeat, no effect on any session. A client MAY call one at any time,
+- **T10** The **read-only subset** is stateless and idempotent: `GET` only, safe
+  to repeat, no effect on any session. A client MAY call one at any time,
   including before the WebSocket handshake.
+- **T10a** A **mutating subset** exists under `/api/agents/`. These routes are
+  `POST`, change state outside octoterm (they edit another program's
+  configuration file), and are gated by server configuration
+  (`agents.install_enabled`, default off) — a disabled deployment answers `403`.
+  They are still session-independent: nothing here concerns a session, a channel
+  or a byte stream. Rationale for keeping them off the control channel: a new
+  client→server control message is breaking (X3) and would force a proto bump
+  for a request that is low-frequency and expressible over HTTP.
 - **T11** Failure is reported by HTTP status, not by a `ServerMsg`. `error`
   (§9) belongs to the socket and never appears here.
 - **T12** A client MUST tolerate any `/api/` route being absent (`404`) or
@@ -84,6 +94,11 @@ scope:         everything on the wire between a client and octoterm-server
 | route | reply | notes |
 | --- | --- | --- |
 | `GET /api/launchers` | `{ "launchers": [Launcher] }` | see §2.2 |
+| `GET /api/agents` | `{ "agents": [AgentStatus] }` | which agents are installed on the host, and whether octoterm's integration is in place |
+| `GET /api/agents/{id}/plan` | `{ "install": [...], "uninstall": [...] }` | dry run: what editing the agent's config would do |
+| `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
+| `POST /api/agents/{id}/uninstall` | same | T10a |
+| `GET /api/agents/sessions` | `{ "sessions": [AgentSession] }` | full snapshot; a client re-fetches this after every reconnect (A5) |
 
 ### 2.2 `GET /api/launchers` [T]
 
@@ -242,6 +257,7 @@ runs as the user who started the daemon. The bearer token is the only boundary
 | `resync-begin` | `channel:u32` | opens a resync burst (S5) |
 | `resync-end` | `channel:u32`, `seq:u64` | closes a resync burst; authoritative anchor (S7b) |
 | `session-exited` | `channel:u32`, `id:u64` | child exited; the channel's stream is over (S11) |
+| `agent-event` | see §15 | a coding agent inside a hosted session changed state |
 
 ### 6.3 Shared types
 
@@ -401,6 +417,8 @@ Current corpus (reference only, see E4):
 | geometry floor | 20×5 | `pty.rs MIN_COLS/MIN_ROWS` |
 | default geometry merge policy | `smallest` | `config.rs WindowSize` |
 | launcher entries per provider | 100 | `launcher/mod.rs PER_PROVIDER_CAP` |
+| `agent-event` payload | 4 KiB | §15 A4 |
+| agent hook request body | 512 KiB | `app.rs` route layer |
 | reference reconnect backoff | 250 ms doubling, cap 10 s | `client-core`, `client.ts` |
 
 ## 11. Compatibility and versioning [X]
@@ -439,6 +457,7 @@ Before proposing anything new, rule out every applicable row:
 | session inventory | `list-sessions` → `sessions` |
 | a static, session-independent catalogue, wanted before the socket is up | a `GET /api/` route (T8) |
 | server-initiated notice about a session's existence or identity | a new `SessionEventKind` on `session-event` |
+| server-initiated notice about something *running inside* a session | `agent-event` (§15) — `session-event` is about the session's existence and identity, not its contents |
 | per-attachment lifecycle | `attach` / `detach` |
 | ask for a different geometry | `resize` — a request, not a command (G2) |
 | tell clients the authoritative geometry | `resized` (G5) |
@@ -506,3 +525,46 @@ Every item MUST be answered in the proposal.
   Conformant with D3; the design doc's wording is stale.
 - **DEV2** The same doc lists "credit 背压" among the tests. No credit
   mechanism exists or is planned — backpressure is D5 + S6.
+
+## 15. Agent integration [A]
+
+- **A1** `agent-event` is broadcast to every authenticated connection whenever a
+  coding agent running inside a hosted session changes state. Shape:
+
+  ```
+  agent-event {
+      agent_id:str, agent_session_id:str, session:u64?,
+      state:AgentState, pending:str?, detail:str?
+  }
+  AgentState  "idle" | "thinking" | "working" | "waiting" | "done" | "error"
+  ```
+
+- **A2** It is a **server→client** addition and therefore compatible in both
+  directions (X2): it does **not** bump `proto`. There is deliberately no
+  client→server counterpart — answering a pending request is
+  `POST /api/agents/answer`, because a new client→server type is breaking (X3)
+  and the request is low-frequency.
+- **A3** `session` is the hosted session the agent belongs to. It is optional
+  only so that supporting agents outside octoterm later does not require a bump
+  (X4); the current server always sets it.
+- **A4** `pending` is non-null exactly when the agent is blocked waiting for a
+  human answer. Its value is the natural key (C5) a client passes back to
+  `POST /api/agents/answer`. `detail` is a one-line human-readable string;
+  clients display it and MUST NOT parse it. Whole message ≤ 4 KiB (§10).
+- **A5** No incremental reconciliation. A client that (re)connects MUST fetch
+  `GET /api/agents/sessions` for the full snapshot; `agent-event` only carries
+  deltas afterwards. Events missed while disconnected are recovered by that
+  fetch, not by replay (R6).
+- **A6** `state` is a **closed** enum. Adding a value is breaking for strict
+  decoders and MUST go through §12.
+- **A7** `agent-event` carries no VT bytes and injects nothing into any session
+  stream; it has no effect on `seq` (R7). Taking over an agent's prompt by
+  typing into it is ordinary session input on a data channel (§7) — indis-
+  tinguishable from a human at the keyboard, and counted in `seq` like any other
+  output it produces.
+- **A8** The server↔agent side of this feature (how hooks are installed into a
+  third-party agent's configuration, and the `/hook/...` ingress they call) is
+  **not part of this document**: it is not on the wire between a client and
+  octoterm. It is specified in
+  `docs/superpowers/specs/2026-08-18-octoterm-agent-integration-design.md`.
+  Clients neither see nor depend on it.
