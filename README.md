@@ -132,9 +132,10 @@ only finished surface.
 
 1. **More terminal capability, more clients.** Deepen core terminal features,
    then bring the same protocol to mobile — iOS and Android clients.
-2. **Agent integration.** Integrate coding agents such as Claude Code, Codex,
-   pi and others, so a hosted session lets you take over an agent's prompts,
-   answer its choices, and check its status from any device.
+2. **Agent integration.** A hosted session lets you take over an agent's
+   prompts, answer its choices, and check its status from any device.
+   **Claude Code works today** (hook install, live session state, remote
+   approval); Codex, pi and others come later.
 3. **No file manager.** File management is very unlikely to ever be added —
    that's what the shell in your session is for.
 

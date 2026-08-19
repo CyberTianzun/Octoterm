@@ -15,6 +15,18 @@ import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
+import {
+  type AgentMap,
+  type AgentSession,
+  answerPending,
+  applyEvent,
+  fetchAgentSessions,
+  forSession,
+  replaceAll,
+  stateIcon,
+  stateText,
+  waitingList,
+} from "./agents";
 
 const $ = (id: string) => document.getElementById(id)!;
 const client = new OctoClient();
@@ -26,6 +38,8 @@ let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
 const previews = new Map<number, Terminal>();
+/** key = `${agent_id} ${agent_session_id}`,见 agents.ts */
+const agents: AgentMap = new Map();
 
 let config: OctoConfig = loadConfig(resolveTheme);
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
@@ -143,6 +157,7 @@ function applyRenderer(terminal: Terminal) {
 const settings = mountSettings({
   get: () => config,
   set: (next) => applyConfig(next),
+  token,
 });
 
 /* ---------- sidebar:选择/预览/改名/结束都在这里 ---------- */
@@ -167,6 +182,16 @@ function renderSidebar() {
         <button data-act="kill" title="${t("session.kill")}">✕</button>
       </div>`;
     row.querySelector(".sname")!.textContent = s.name;
+    const agent = forSession(agents, s.id);
+    if (agent) {
+      // 状态点只是「这个会话里有 AI 在跑」的提示,点它没有额外语义 —— 点整行
+      // 仍然是打开这个会话。等人回答时的操作按钮在上方的横幅里,不塞进列表。
+      const dot = document.createElement("span");
+      dot.className = `adot a-${agent.state}`;
+      dot.textContent = stateIcon(agent.state);
+      dot.title = stateText(agent);
+      row.querySelector(".sname")!.prepend(dot);
+    }
     row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
     const previewBox = row.querySelector(".preview") as HTMLElement;
     if (config.ui.sidebarPreview) {
@@ -319,6 +344,8 @@ mountNewSessionMenu($("new-session"), {
 });
 
 client.onOpen = () => {
+  // 断线期间漏掉的 agent-event 靠这次全量拉取补齐,不做增量对账
+  void refreshAgents();
   setBanner(null);
   setConn("conn.connected");
   client.send({ type: "list-sessions" });
@@ -331,6 +358,78 @@ client.onFatal = (message) => {
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
+/**
+ * 「有 AI 在等你」横幅。
+ *
+ * 只放结构化的允许/拒绝。**自由文本回答不在这里** —— octoterm 本来就托管着那个
+ * pty,「去这个会话」一键 attach 过去,直接在终端里打字就是了。再造一个输入框
+ * 只会多一条容易出错的路径,而且它没法处理 agent 自己画的那些 TUI 交互。
+ */
+function renderAgentBanner() {
+  const box = $("agent-banner");
+  const waiting = waitingList(agents);
+  if (waiting.length === 0) {
+    box.hidden = true;
+    box.innerHTML = "";
+    return;
+  }
+  box.hidden = false;
+  box.innerHTML = "";
+  const title = document.createElement("div");
+  title.className = "abanner-title";
+  title.textContent = t("agent.waitingTitle");
+  box.appendChild(title);
+
+  for (const a of waiting) {
+    const row = document.createElement("div");
+    row.className = "abanner-row";
+    const what = document.createElement("span");
+    what.className = "abanner-what";
+    const host = sessions.find((x) => x.id === a.session);
+    what.textContent = `${host ? host.name : `#${a.session}`} · ${stateText(a)}`;
+    const acts = document.createElement("span");
+    acts.className = "abanner-acts";
+    for (const [label, decision] of [
+      [t("agent.allow"), "allow"],
+      [t("agent.deny"), "deny"],
+    ] as const) {
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.addEventListener("click", async () => {
+        // 先禁用整行,避免连点造成两次提交(第二次会拿到 409)
+        acts.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = true));
+        const outcome = await answerPending(token(), a.pending!, decision);
+        if (outcome !== "ok") {
+          const msg =
+            outcome === "gone" ? t("agent.gone")
+            : outcome === "already" ? t("agent.already")
+            : t("agent.failed");
+          what.textContent = `${what.textContent} — ${msg}`;
+        }
+        // 不管结果如何都摘掉本地这条:服务端会用 agent-event 把真相推回来
+        a.pending = null;
+        renderAgentBanner();
+      });
+      acts.appendChild(b);
+    }
+    const go = document.createElement("button");
+    go.textContent = t("agent.openSession");
+    go.addEventListener("click", () => {
+      if (a.session != null) openTerminal(a.session);
+    });
+    acts.appendChild(go);
+    row.append(what, acts);
+    box.appendChild(row);
+  }
+}
+
+/** 全量拉取。页面打开和每次重连后都要做一次(协议 A5)。 */
+async function refreshAgents() {
+  replaceAll(agents, (await fetchAgentSessions(token())) as AgentSession[]);
+  renderSidebar();
+  renderAgentBanner();
+}
+
 client.onChannelData = (channel, payload) => {
   if (channel === TERM_CHANNEL && term) {
     term.write(payload);
@@ -348,6 +447,11 @@ client.onControl = (msg) => {
         closeTerminal();
       }
       client.send({ type: "list-sessions" });
+      break;
+    case "agent-event":
+      applyEvent(agents, msg as AgentSession);
+      renderSidebar();
+      renderAgentBanner();
       break;
     case "preview-data": {
       const p = previews.get(msg.id);

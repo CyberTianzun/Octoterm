@@ -18,14 +18,17 @@ import {
 } from "./config";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
+import { type AgentStatus, fetchAgents, setAgentIntegration } from "./agents";
 
 export interface SettingsHost {
   get(): OctoConfig;
   /** 应用并持久化。 */
   set(cfg: OctoConfig): void;
+  /** 打 `/api/` 时用的 bearer。AI 集成页要拉清单、要装卸 hook。 */
+  token(): string;
 }
 
-type Tab = "theme" | "font" | "terminal" | "ui" | "io";
+type Tab = "theme" | "font" | "terminal" | "ui" | "io" | "agents";
 
 const el = <K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -138,6 +141,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     ["terminal", "settings.tab.terminal"],
     ["ui", "settings.tab.ui"],
     ["io", "settings.tab.io"],
+    ["agents", "settings.tab.agents"],
   ];
 
   /** 改一格配置:浅合并进当前配置并立即应用。 */
@@ -458,6 +462,66 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     return wrap;
   }
 
+  /* ---------- AI 集成 ---------- */
+
+  /**
+   * 这一页是整个设置里唯一会**改别人的文件**的地方,所以要把话说在前面:
+   * 上方常驻一句说明(会备份、可还原),每个 agent 下方显示检测依据与冲突。
+   *
+   * 列表是异步拉的,拉之前先铺一个空壳 —— 打开设置不该等网络。
+   */
+  function renderAgents(): HTMLElement {
+    const wrap = el("div", "set-pane");
+    const note = el("div", "set-hint", t("agent.writeNote"));
+    const list = el("div", "agent-list");
+    wrap.append(note, list);
+
+    const paint = (agents: AgentStatus[]) => {
+      list.innerHTML = "";
+      if (agents.length === 0) {
+        list.appendChild(el("div", "empty", t("agent.notFound")));
+        return;
+      }
+      for (const a of agents) {
+        const card = el("div", "agent-card");
+        const head = el("div", "agent-head");
+        head.append(el("span", "agent-name", a.name));
+        const badge =
+          a.integration === "installed" ? t("agent.installed")
+          : a.integration === "stale-port" ? t("agent.stalePort")
+          : t("agent.notInstalled");
+        head.append(el("span", "agent-badge", badge));
+        card.append(head);
+        card.append(el("div", "set-hint", a.detected.detail));
+        for (const c of a.conflicts) card.append(el("div", "agent-conflict", c));
+        if (a.conflicts.length > 0) card.append(el("div", "set-hint", t("agent.conflictNote")));
+
+        const installed = a.integration !== "not-installed";
+        const btn = el("button", "agent-act", installed ? t("agent.uninstall") : t("agent.install"));
+        const status = el("span", "agent-status");
+        btn.addEventListener("click", async () => {
+          btn.disabled = true;
+          const outcome = await setAgentIntegration(host.token(), a.id, !installed);
+          btn.disabled = false;
+          if (outcome === "ok") {
+            void refreshAgents();
+            return;
+          }
+          status.textContent =
+            outcome === "disabled" ? t("agent.disabledHint") : t("agent.installFailed");
+        });
+        const acts = el("div", "agent-acts");
+        acts.append(btn, status);
+        card.append(acts);
+        list.appendChild(card);
+      }
+    };
+
+    const refreshAgents = async () => paint(await fetchAgents(host.token()));
+    void refreshAgents();
+    return wrap;
+  }
+
   function render() {
     title.textContent = t("app.settings");
     closeBtn.title = t("settings.close");
@@ -467,7 +531,8 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       : tab === "font" ? renderFont()
       : tab === "terminal" ? renderTerminal()
       : tab === "ui" ? renderUi()
-      : renderIo();
+      : tab === "io" ? renderIo()
+      : renderAgents();
     body.replaceChildren(pane);
   }
 

@@ -333,3 +333,77 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   }
   #menu { display: inline-block; }
 }
+
+/* ---------- agent 集成 ---------- */
+
+/* 会话列表上的状态点。只是提示,不可点 —— 操作在上方横幅里。 */
+.adot {
+  display: inline-block;
+  width: 1em;
+  margin-right: 4px;
+  font-weight: 700;
+  opacity: 0.85;
+}
+.a-waiting { color: #ffb020; }
+.a-error { color: #ff6b6b; }
+.a-working { color: #4ea1ff; }
+.a-thinking { color: #9a8cff; }
+.a-idle { color: #7a7a7a; }
+.a-done { color: #5a5a5a; }
+
+/* 「有 AI 在等你」横幅。压在 reconnect(6)之下、error(7)之上不合适 ——
+   它不是故障,是待办,所以放在两者之下,故障信息永远盖得住它。 */
+#agent-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 5;
+  background: #4a3a00;
+  color: #ffe9b0;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.abanner-title {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.abanner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+.abanner-what {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.abanner-acts {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+.abanner-acts button {
+  padding: 2px 10px;
+  cursor: pointer;
+}
+.abanner-acts button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-list { display: flex; flex-direction: column; gap: 10px; }
+.agent-card {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+.agent-head { display: flex; align-items: baseline; gap: 8px; }
+.agent-name { font-weight: 600; }
+.agent-badge { font-size: 12px; opacity: 0.8; }
+/* 冲突不是错误,但必须扎眼到用户不会略过 */
+.agent-conflict { color: #ffb020; font-size: 12px; margin-top: 4px; }
+.agent-acts { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.agent-status { font-size: 12px; opacity: 0.85; }
