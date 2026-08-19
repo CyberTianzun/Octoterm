@@ -336,20 +336,6 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- agent 集成 ---------- */
 
-/* 会话列表上的状态点。只是提示,不可点 —— 操作在上方横幅里。 */
-.adot {
-  display: inline-block;
-  width: 1em;
-  margin-right: 4px;
-  font-weight: 700;
-  opacity: 0.85;
-}
-.a-waiting { color: #ffb020; }
-.a-error { color: #ff6b6b; }
-.a-working { color: #4ea1ff; }
-.a-thinking { color: #9a8cff; }
-.a-idle { color: #7a7a7a; }
-.a-done { color: #5a5a5a; }
 
 /* 「有 AI 在等你」横幅。压在 reconnect(6)之下、error(7)之上不合适 ——
    它不是故障,是待办,所以放在两者之下,故障信息永远盖得住它。 */
@@ -420,3 +406,94 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 
 /* 「装完还要做一步」:是流程提示,不是风险,所以用中性色而不是警示色 */
 .agent-activation { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+
+/* ---------- 会话列表页 ---------- */
+
+#session-list {
+  padding: 16px 20px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+.slist-title {
+  margin: 0 0 12px;
+  font-size: 15px;
+  font-weight: 600;
+  opacity: 0.75;
+}
+.slist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+}
+.scard {
+  border: 1px solid rgba(128, 128, 128, 0.3);
+  border-radius: 8px;
+  padding: 12px;
+  cursor: pointer;
+}
+.scard:hover { border-color: rgba(128, 128, 128, 0.6); }
+.scard-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+.scard-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.scard-meta { font-size: 12px; opacity: 0.65; margin-bottom: 10px; }
+.scard-open { padding: 3px 12px; cursor: pointer; }
+
+#back-to-list { margin-left: 6px; }
+
+/* ---------- 状态胶囊 ---------- */
+
+/* 一个字符的圆点扫一眼看不见。这里要回答的是「哪台在等我」,所以给底色、给文字,
+   并且让 waiting 明显重于其它档 —— 其它状态是「它在忙」,只有 waiting 是「该你了」。*/
+.apill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+  background: rgba(128, 128, 128, 0.18);
+  color: inherit;
+}
+.apill.a-waiting {
+  background: #ffb020;
+  color: #241a00;
+  font-weight: 700;
+  /* 唯一会动的一档:它是唯一需要人动手的状态 */
+  animation: apill-pulse 1.6s ease-in-out infinite;
+}
+.apill.a-error { background: #ff6b6b; color: #2a0000; font-weight: 600; }
+.apill.a-working { background: rgba(78, 161, 255, 0.28); }
+.apill.a-thinking { background: rgba(154, 140, 255, 0.28); }
+.apill.a-idle { background: rgba(128, 128, 128, 0.18); opacity: 0.8; }
+
+@keyframes apill-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* 侧边栏里的胶囊要更紧凑,窄条塞不下长文案 */
+.srow .apill {
+  font-size: 10px;
+  padding: 0 6px;
+  max-width: 11em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .apill.a-waiting { animation: none; }
+}

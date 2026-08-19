@@ -23,7 +23,6 @@ import {
   fetchAgentSessions,
   forSession,
   replaceAll,
-  stateIcon,
   stateText,
   waitingList,
 } from "./agents";
@@ -184,13 +183,9 @@ function renderSidebar() {
     row.querySelector(".sname")!.textContent = s.name;
     const agent = forSession(agents, s.id);
     if (agent) {
-      // 状态点只是「这个会话里有 AI 在跑」的提示,点它没有额外语义 —— 点整行
-      // 仍然是打开这个会话。等人回答时的操作按钮在上方的横幅里,不塞进列表。
-      const dot = document.createElement("span");
-      dot.className = `adot a-${agent.state}`;
-      dot.textContent = stateIcon(agent.state);
-      dot.title = stateText(agent);
-      row.querySelector(".sname")!.prepend(dot);
+      // 一个字符的圆点太轻,扫一眼看不见 —— 这里要的是「哪台在等我」,
+      // 所以做成有底色的胶囊,`waiting` 用最扎眼的一档(见 style.css)。
+      row.querySelector(".sname")!.prepend(agentBadge(agent));
     }
     row.querySelector(".smeta")!.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
     const previewBox = row.querySelector(".preview") as HTMLElement;
@@ -252,7 +247,8 @@ function openTerminal(id: number) {
     disposeTerminal();
   }
   attachedId = id;
-  $("workspace-empty").hidden = true;
+  $("session-list").hidden = true;
+  $("back-to-list").hidden = false;
   $("terminal-wrap").hidden = false;
   term = new Terminal({ allowProposedApi: true, ...toTerminalOptions(config) });
   fit = new FitAddon();
@@ -300,7 +296,9 @@ function closeTerminal() {
   attachedId = null;
   disposeTerminal();
   $("terminal-wrap").hidden = true;
-  $("workspace-empty").hidden = false;
+  $("session-list").hidden = false;
+  $("back-to-list").hidden = true;
+  renderSessionList();
   client.send({ type: "list-sessions" });
 }
 
@@ -322,6 +320,9 @@ function refit() {
 window.addEventListener("resize", refit);
 window.visualViewport?.addEventListener("resize", refit);
 $("menu").addEventListener("click", () => setDrawer(true));
+// 回列表 = detach 并回到主视图。会话本身不受影响(协议 CH6:detach 从不结束会话),
+// 再点进来是一次 resync —— 用一次重绘换「随时能纵览全局」,值。
+$("back-to-list").addEventListener("click", () => closeTerminal());
 $("scrim").addEventListener("click", () => setDrawer(false));
 $("open-settings").addEventListener("click", () => settings.open());
 
@@ -358,6 +359,64 @@ client.onFatal = (message) => {
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
+/** 状态胶囊。列表页和侧边栏共用同一个,保证两处看到的是一回事。 */
+function agentBadge(a: AgentSession): HTMLElement {
+  const pill = document.createElement("span");
+  pill.className = `apill a-${a.state}`;
+  pill.textContent = stateText(a);
+  pill.title = stateText(a);
+  return pill;
+}
+
+/**
+ * 会话列表页。
+ *
+ * 侧边栏那份是「随时能切」的窄条,这一份是「站在这里挑」的主视图 —— 卡片更大、
+ * 状态更显眼、还带预览。没有会话时它就是空状态提示,不再单独留一个 empty 元素。
+ */
+function renderSessionList() {
+  const box = $("session-list");
+  box.innerHTML = "";
+  if (attachedId !== null) return; // 正在看终端时不渲染,省得白算
+  if (sessions.length === 0) {
+    box.innerHTML = `<div class="empty">${t("app.empty")}</div>`;
+    return;
+  }
+  const title = document.createElement("h2");
+  title.className = "slist-title";
+  title.textContent = t("session.listTitle");
+  box.appendChild(title);
+
+  const grid = document.createElement("div");
+  grid.className = "slist-grid";
+  for (const s of sessions) {
+    const card = document.createElement("div");
+    card.className = "scard";
+    const head = document.createElement("div");
+    head.className = "scard-head";
+    const name = document.createElement("span");
+    name.className = "scard-name";
+    name.textContent = s.name;
+    head.appendChild(name);
+    const agent = forSession(agents, s.id);
+    if (agent) head.appendChild(agentBadge(agent));
+    const meta = document.createElement("div");
+    meta.className = "scard-meta";
+    meta.textContent = `${s.cols}×${s.rows} · ${fmtTime(s.created_at)}`;
+    const open = document.createElement("button");
+    open.className = "scard-open";
+    open.textContent = t("session.open");
+    open.addEventListener("click", () => openTerminal(s.id));
+    card.append(head, meta, open);
+    // 整张卡都可点,按钮只是给「这里可以点」一个明确的落点
+    card.addEventListener("click", (ev) => {
+      if ((ev.target as HTMLElement).tagName !== "BUTTON") openTerminal(s.id);
+    });
+    grid.appendChild(card);
+  }
+  box.appendChild(grid);
+}
+
 /**
  * 「有 AI 在等你」横幅。
  *
@@ -427,6 +486,7 @@ function renderAgentBanner() {
 async function refreshAgents() {
   replaceAll(agents, (await fetchAgentSessions(token())) as AgentSession[]);
   renderSidebar();
+  renderSessionList();
   renderAgentBanner();
 }
 
@@ -441,6 +501,7 @@ client.onControl = (msg) => {
     case "sessions":
       sessions = msg.sessions;
       renderSidebar();
+      renderSessionList();
       break;
     case "session-event":
       if (msg.event === "closed" && attachedId === msg.session?.id) {
@@ -451,6 +512,7 @@ client.onControl = (msg) => {
     case "agent-event":
       applyEvent(agents, msg as AgentSession);
       renderSidebar();
+      renderSessionList();
       renderAgentBanner();
       break;
     case "preview-data": {

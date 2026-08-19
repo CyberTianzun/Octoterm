@@ -35,7 +35,10 @@ const zh = {
   "app.newSession": "新建会话",
   "app.sessionList": "会话列表",
   "app.kernel": "本地会话内核",
-  "app.empty": "在左侧选择一个会话,或新建一个",
+  "app.empty": "还没有会话。点右上角 + 新建一个,或者在左侧选一个。",
+  "app.backToList": "回到会话列表",
+  "session.listTitle": "会话",
+  "session.open": "打开",
   "app.tokenPrompt": "octoterm token:",
 
   /* ---------- 连接状态 ---------- */
@@ -185,7 +188,10 @@ const en: Record<MsgKey, string> = {
   "app.newSession": "New session",
   "app.sessionList": "Sessions",
   "app.kernel": "Local session kernel",
-  "app.empty": "Pick a session on the left, or start a new one",
+  "app.empty": "No sessions yet. Hit + to start one.",
+  "app.backToList": "Back to the session list",
+  "session.listTitle": "Sessions",
+  "session.open": "Open",
   "app.tokenPrompt": "octoterm token:",
 
   "conn.connected": "Connected",

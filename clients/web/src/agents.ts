@@ -84,18 +84,6 @@ export function waitingList(map: AgentMap): AgentSession[] {
     .sort((a, b) => (a.session ?? 0) - (b.session ?? 0));
 }
 
-const ICONS: Record<AgentState, string> = {
-  waiting: "!",
-  error: "x",
-  working: "*",
-  thinking: "~",
-  idle: "-",
-  done: ".",
-};
-
-export function stateIcon(state: AgentState): string {
-  return ICONS[state] ?? "-";
-}
 
 /**
  * 状态 → 词条键。**显式写全**,不用模板字面量拼 —— 拼出来的键既躲开了 `MsgKey`
