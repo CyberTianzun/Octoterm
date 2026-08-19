@@ -389,158 +389,111 @@ http hook,外加 env/permissions/model)。合成用例覆盖不到「多事件 �
 **留给后续 task 的已知缺口**:`$CLAUDE_CONFIG_DIR` 没处理(Claude Code 支持用它换掉
 `~/.claude`),代码里已标注。
 
-### Task 3(改版): 安装 = 写我们自己的目录,不碰用户的文件
+### Task 3: 落盘执行与安装路由
 
-> **本 task 于 2026-08-19 依据四条实测结论重写**,原方案(编辑 `~/.claude/settings.json`)
-> 降级为其他 agent 的兜底路径。四条结论:
->
-> 1. **插件的 `hooks/hooks.json` 不支持 `type: "http"`** —— 同一个插件里 `type: "command"`
->    正常触发,`type: "http"` 一次都不触发。合理:一个能把 `tool_input` POST 到任意 URL 的
->    可分享插件是数据外泄载体。
-> 2. **skills 目录插件会自动加载**:`~/.claude/skills/<name>/` 放一个
->    `.claude-plugin/plugin.json` + `hooks/hooks.json`,下次会话直接生效,**不需要 install
->    步骤,不需要改任何 settings.json**。
-> 3. **同一事件上多个阻塞式 hook 会全部触发,最后注册的那个说了算**。实测:deny 在前
->    allow 在后 → 放行;调换顺序 → 拒绝。
-> 4. 项目级 `<cwd>/.claude/settings.json` 的 hooks 正常生效,是**测试**本功能的正确姿势 ——
->    全程不必碰全局配置。
+照参考实现的形态:**写 `~/.claude/settings.json`,hook 用 `type: "http"` 直连**。
+Claude 直接 POST 到 octoterm-server,没有中间脚本、没有进程启动 —— server 自己就是
+那个端点,这和「单静态二进制」的定位是一回事。
 
-**新方案**:octoterm 在 `~/.claude/skills/octoterm/` 下写**自己独占的一棵目录树**,
-hook 用 `type: "command"` 指向 **octoterm 自己的二进制**(新增一个 `hook` 子命令)。
+> **插件目录方案已评估并否决**,理由是实测硬约束:**插件里 `type: "http"` 根本不触发**,
+> 只能用 `type: "command"`,连带要求新增 `hook` 子命令 + 每事件 spawn 一次进程,还会让
+> octoterm 出现在用户的 skills 列表里。换来的好处大部分能用工程手段压掉(见 spec
+> 「已评估并否决的备选」)。这条实测结论留在文档里,免得以后再走一遍。
 
-这一改消掉了原方案的大部分副作用:
-
-| 原副作用 | 新方案下 |
-| --- | --- |
-| 改用户/别家共用的文件 | **消失** —— 目录整个是我们的 |
-| 与 Claude Code 自己的写入竞态(它会往 `permissions` 加规则) | **消失** —— 不再 read-modify-write 别人的文件 |
-| 重新序列化打乱用户文件格式 | **消失** |
-| 备份文件落在用户目录里 | **消失** —— 不覆盖任何非我方文件,不需要备份 |
-| 改端口后 URL 失效(`StalePort`) | **消失** —— 目录是我们的,每次 server 启动重写一遍即可,自愈 |
-| 非托管会话打来 401、刷爆日志 | **消失** —— 我们的二进制发现环境里没有 `OCTOTERM_SESSION_ID` 就**直接退出**,零网络 |
-| 端口被别人占用时把 `tool_input` 发过去 | **减轻** —— 由我们的二进制发起连接,可以先验明对端身份再发 payload |
-| 全机所有 Claude 会话都会触发 hook | **仍在**,但代价降为一次极短的进程启动 |
-| 与别家阻塞式 hook 抢同一事件 | **仍在**,见下面的 Step 5 |
-
-代价:每个 hook 事件多一次进程启动(遥测类 `async: true`,不阻塞 Claude);二进制路径要写进
-`hooks.json`(但目录是我们的,每次启动重写即可自愈)。
+Task 2 已经写好并测过的编辑计划、所有权判定、幂等与还原,**就是这一 task 的地基**。
+这里只加「怎么安全地落到磁盘上」。
 
 **Files:**
-- Create: `crates/server/src/agent/apply.rs`(写/删我们独占的目录树)
-- Create: `crates/server/src/agent/hook_cli.rs`(`hook` 子命令)
+- Create: `crates/server/src/agent/apply.rs`
 - Create: `crates/server/tests/agent_install.rs`
-- Modify: `crates/server/src/agent/claude_code.rs`(`plan_install` 改为产出文件内容)
-- Modify: `crates/server/src/agent/edit.rs`(`EditOp` 增加 `WriteOwnedFile` / `RemoveOwnedTree`)
-- Modify: `crates/server/src/agent/detect.rs`(见 Step 4 的自证陷阱)
-- Modify: `crates/server/src/main.rs`(子命令)、`config.rs`(`[agents]` 配置节)、`agent/routes.rs`
+- Modify: `crates/server/src/config.rs`(`[agents]` 配置节)、`agent/routes.rs`、`app.rs`
+- Modify: `crates/server/src/launcher/mod.rs`(顶部注释措辞)、`docs/protocol.md`(T10 修订)
 
 **Interfaces:**
 - Produces:
+  - `GET  /api/agents/{id}/plan` —— 预演,返回将要产生的编辑与 diff 摘要
   - `POST /api/agents/{id}/install`、`POST /api/agents/{id}/uninstall`
-  - `GET /api/agents/{id}/plan` —— 预演,返回将要创建/删除的文件清单
-  - `octoterm-server hook <agent> <event>` —— hook 子命令
 
 - [ ] **Step 1: 写失败的测试**
 
+`crates/server/tests/agent_install.rs`,用 `tempfile` 造假 home:
+
 ```rust
-#[test] fn install_disabled_writes_nothing() {}          // 开关关着 → 403,一个文件都不建
-#[test] fn install_creates_only_our_own_tree() {}        // 只在 skills/octoterm/ 下建东西
-#[test] fn install_is_idempotent_on_disk() {}            // 装两次,目录内容逐字节相同
-#[test] fn uninstall_removes_our_tree_only() {}          // 兄弟目录(别的 skill)一个不动
-#[test] fn install_refreshes_stale_binary_path() {}      // 二进制换了位置 → 重装后指向新路径
-#[test] fn install_refuses_to_delete_foreign_tree() {}   // 目录存在但没有我们的 manifest → 拒绝,不覆盖
+#[test] fn disabled_switch_writes_nothing() {}        // 开关关着 → 403,文件字节不变
+#[test] fn backup_lands_outside_target_dir() {}       // 备份不在 ~/.claude 里
+#[test] fn backup_matches_original_byte_for_byte() {}
+#[test] fn backup_keeps_only_five() {}                // 装 7 次,只剩 5 份
+#[test] fn write_is_atomic() {}                       // tmp + rename,不存在半截文件
+#[test] fn refuses_when_target_is_not_valid_json() {} // 宁可报错也不覆盖
+#[test] fn install_then_uninstall_is_byte_identical() {} // 端到端落盘版的还原保证
+#[test] fn missing_target_file_is_created() {}        // 用户还没有 settings.json 的情形
 ```
 
-最后一条是底线:`~/.claude/skills/octoterm/` 万一是用户自己的东西,我们**宁可报错也不能删**。
-判据是里面有没有我们写的 `.claude-plugin/plugin.json` 且 `name == "octoterm"`。
-
-- [ ] **Step 2: 产出的目录树**
-
-```
-~/.claude/skills/octoterm/
-├── .claude-plugin/plugin.json     { "name": "octoterm", "description": ..., "version": <本机 server 版本> }
-└── hooks/hooks.json               全部 type:command,指向 octoterm 二进制
-```
-
-`hooks.json` 里一条长这样:
-
-```json
-{ "hooks": { "PermissionRequest": [ { "matcher": "", "hooks": [
-  { "type": "command",
-    "command": "\"/Applications/octoterm.app/Contents/MacOS/octoterm-server\" hook claude-code permission-request",
-    "timeout": 600 } ] } ] } }
-```
-
-遥测类同形,但 `"timeout": 5` + `"async": true`。
-
-二进制路径取 `std::env::current_exe()`。**每次 server 启动时无条件重写这棵树**(内容一致就
-不落盘),于是换路径、换端口、升级版本全部自愈 —— 这是「目录归我们所有」换来的最大好处。
-
-- [ ] **Step 3: `hook` 子命令**
-
-```
-octoterm-server hook <agent> <event>
-```
-
-行为,按顺序:
-
-1. 读 `OCTOTERM_SESSION_ID` / `OCTOTERM_HOOK_TOKEN`。**任一缺失就立刻 exit 0,不打印、
-   不联网** —— 这一条就是「只管托管会话」这条边界的执行点,也是非托管会话零噪声的原因。
-2. 从 stdin 读 JSON(有上限,超限即放弃)。
-3. POST 到 `http://127.0.0.1:<port>/hook/<agent>/<event>`,带 `Authorization` 头。
-   端口从环境变量拿(`OCTOTERM_HOOK_PORT`,spawn 时一并注入),不去猜、不扫端口。
-4. 遥测类:短超时,失败静默 exit 0 —— **绝不能因为宿主不在就影响 Claude**。
-5. 决策类:阻塞等响应,把响应体原样打印到 stdout;超时/失败则**不打印任何东西**
-   (= 无决定),让 Claude 回落到它自己的审批弹窗。
-
-> ⚠️ 待实测:command hook 由 Claude Code spawn,应当继承 pty 的环境变量。原理上必然,
-> 但第一步就要验证 `OCTOTERM_SESSION_ID` 确实读得到,否则整条链路不成立。
-
-- [ ] **Step 4: 堵掉自证陷阱**
-
-我们会在 `~/.claude/skills/` 下建目录,而 Task 1 的检测里「`~/.claude` 目录下有别的东西」
-是「用户装过 Claude Code」的证据之一。装完 hook 之后,这条证据就变成了**我们自己造的**。
-
-这正是参考实现栽过的坑(它自己创建 `~/.claude/`,最后不得不把 claude-code 整个从默认检测
-里排除)。修法:`skills/` 只有在**除我们之外**还有别的条目时才算证据。加回归测试。
-
-- [ ] **Step 5: 与别家阻塞式 hook 共存的策略**
-
-实测结论 3:多个阻塞 hook 全部触发,**最后注册的赢**。而插件与 settings.json 的相对顺序
-**尚未实测**。这意味着装上我们的 hook 可能会**悄悄推翻**别家(例如 clawd-on-desk)的 deny。
-
-不赌顺序。策略:
-
-- `GET /api/agents` 已经能报出 `conflicts`(Task 1 已实现,本机实测有效);
-- **检测到别家阻塞式 hook 时,默认不装我们的决策类 hook**,只装遥测类,并在 UI 上说明
-  原因与后果;用户显式要求才装。
-- 遥测类无论如何都安全,不参与决策。
-
-- [ ] **Step 6: 配置节与门控**
+- [ ] **Step 2: 配置节**
 
 ```toml
 [agents]
-install_enabled = false     # 默认关。写的虽然是自己的目录,但会改变全机 Claude 的行为
+install_enabled = false     # 默认关。headless / 共享部署可永久关闭
 session_stale_secs = 600
 working_stale_secs = 300
 ```
 
-`Config` 加 `#[serde(default)] pub agents: AgentsConfig`,全部字段带默认值 —— 老配置文件
-不写这一节也要能读。
+`Config` 加 `#[serde(default)] pub agents: AgentsConfig`,全部字段带默认值 —— 老配置
+文件不写这一节也要能读。
 
-- [ ] **Step 7: 改注释,消除「代码说 A、行为是 B」**
+- [ ] **Step 3: 落盘**
 
-`launcher/mod.rs` 顶部「octoterm 从不写别人的配置文件」这句现在**基本还是真的** ——
-新方案只写自己独占的目录,不改任何别人会写的文件。措辞按这个事实收紧,并指向 spec。
-`config.rs` 的「server 自己永不写文件」同理。
+顺序不能变:
 
-`docs/protocol.md` 的 T10 修订照旧:`/api/` 下新增变更子集,分配新规则 ID。
+```
+门控 → 读原文 → 解析成 JSON(失败即 bail)→ 应用计划 → 备份原文 → tmp 写入 → rename
+```
 
-- [ ] **Step 8: 验证**
+备份在**解析成功之后、写入之前**:为一次注定失败的编辑留下备份只是垃圾。
 
-测试全绿。手工:开关关着时 403 且零文件改动;打开后装一次、再装一次,目录逐字节相同;
-卸载后 `~/.claude/skills/` 恢复原状;**全程 `~/.claude/settings.json` 的 mtime 不变**
-(这一条要写成断言,它是本 task 的核心承诺)。
+两条与参考实现不同的地方,都是有意的:
+
+1. **备份落在 octoterm 自己的配置目录**,不是就地写 `.bak`。`~/.claude` 是别人的地方,
+   我们不往里堆垃圾。
+2. **只在 install / uninstall 时写,不做「每次 server 启动重写」**。Claude Code 自己也
+   会写这个文件(「Yes, and always allow」会往 `permissions` 里加规则),读-改-写的竞态
+   窗口必须只出现在用户显式动作那一刻。端口变了导致的失效交给 `StalePort` 自检
+   (Task 1 已实现)去报,由用户点「修复」,而不是我们背着他反复改文件。
+
+- [ ] **Step 4: 三条路由**
+
+`plan` 是只读的,返回将要做的编辑;`install` / `uninstall` 是变更。变更类要过门控,
+且必须返回**做了什么**(改了哪个文件、备份在哪),不能只回一个 200。
+
+- [ ] **Step 5: 与别家阻塞式 hook 共存**
+
+实测:同一事件上多个阻塞 hook **全部触发,最后注册的赢**(deny 在前 allow 在后 → 放行;
+调换顺序 → 拒绝)。我们的计划把自己的组 append 到数组末尾,**因此会覆盖别家的决策** ——
+本机同时装了 clawd-on-desk 时就会发生。
+
+不赌顺序,也不偷偷占先:
+
+- `GET /api/agents` 已能报出 `conflicts`(Task 1 实现,本机实测有效);
+- **检测到别家阻塞式 hook 时,默认只装遥测类**,决策类要用户显式确认,并说清后果;
+- 遥测类无论如何都安全,不参与决策。
+
+- [ ] **Step 6: 改注释与协议文档**
+
+`launcher/mod.rs` 顶部「octoterm 从不写别人的配置文件」改成限定作用域的措辞:**发现只读,
+集成需用户显式动作**,并指向 spec。`config.rs` 的「server 自己永不写文件」同理。
+
+`docs/protocol.md` 的 T10 修订:`/api/` 下**只读子集**保持 GET/无状态/幂等,新增
+`/api/agents/*` 变更子集,说明它为什么不属于会话/通道语义。分配新规则 ID(不复用、不重编号)。
+
+- [ ] **Step 7: 验证**
+
+测试全绿。手工三连:
+
+1. 开关关着时 `install` 返回 403,`~/.claude/settings.json` 的 mtime 不变;
+2. 打开后装一次、再装一次 —— 文件**逐字节相同**(幂等);
+3. 卸载 —— 与初始文件**逐字节相同**(还原)。
+
+第 2、3 条用真实的 `~/.claude/settings.json` 副本跑,不是合成数据。
 
 ### Task 4: 协议扩展 —— `AgentEvent`
 

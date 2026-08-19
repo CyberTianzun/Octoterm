@@ -241,20 +241,34 @@ prompt_id, session_id, tool_input, tool_name, transcript_path
 | 同一事件多个阻塞式 hook 会怎样 | **全部触发,最后注册的赢**。deny 在前 allow 在后 → 放行;调换顺序 → 拒绝 |
 | 项目级 `<cwd>/.claude/settings.json` 的 hooks 生效吗 | **生效**。测试本功能就该用它,全程不必碰全局配置 |
 
-据此,安装形态定为:**在 `~/.claude/skills/octoterm/` 下写我们独占的一棵目录树,hook 用
-`type: "command"` 指向 octoterm 自己的二进制**(新增 `hook` 子命令)。
+### 已评估并否决的备选:插件目录
 
-这不是绕路,而是更符合本项目定位的形态:我们**不再修改任何用户或别家会写的文件**,
-于是并发写竞态、格式重排、备份垃圾、改端口后失效这四类副作用**在机制上就不存在**;
-目录归我们所有,每次 server 启动重写一遍即可自愈。代价是每个事件多一次极短的进程启动。
+既然「插件会自动加载且不需要碰 settings.json」,一度考虑把 hook 放进
+`~/.claude/skills/octoterm/`。**否决**,理由是实测出来的硬约束:
 
-顺带还消掉了一条:我们的二进制发现环境里没有 `OCTOTERM_SESSION_ID` 就**立刻退出、
-不联网**,所以非托管会话既不会打来 401,也不会刷爆日志 ——「只管托管会话」这条边界
-的执行点从「服务端拒收」前移到了「客户端不发」。
+**插件里 `type: "http"` 根本不触发**,只能用 `type: "command"`。这一条会连带要求:
+新增一个 `hook` 子命令、每个 hook 事件 spawn 一次进程、二进制路径要跟着自愈;
+而且 octoterm 会出现在用户的 skills 列表里 —— 那个目录的语义是「技能」,我们放进去的
+东西里一个 skill 都没有。
 
-**遗留**:多个阻塞 hook「最后注册的赢」,而插件与 settings.json 的相对顺序尚未实测。
-这意味着装上我们的 hook 有可能悄悄推翻别家(如 clawd-on-desk)的 deny。不赌顺序:
-检测到别家阻塞式 hook 时,默认只装遥测类,决策类要用户显式确认。
+换来的好处(不改共用文件)大部分可以用工程手段直接压掉,不需要换机制:
+
+| 副作用 | 压掉的办法 |
+| --- | --- |
+| 备份垃圾落在 `~/.claude` | 备份写进 octoterm 自己的配置目录 |
+| 与 Claude Code 自身写入竞态 | 只在 install / uninstall 这种显式动作时写,不做「每次启动重写」,窗口是毫秒级的一次 |
+| 改端口后 URL 失效 | 自检报 `StalePort`,走「检测到 → 提示修复」,不自动改文件 |
+| key 顺序被打乱 | `serde_json` 的 `preserve_order`,已实现并有回归测试 |
+
+真正压不掉的只有一条:**octoterm 没跑而别的进程占了那个端口时,Claude 会把 `tool_input`
+发过去**。7683 是 octoterm 自己的默认端口,被别人占的概率很低;参考实现带着同样的暴露
+出货,并用响应头 `x-clawd-server` 让 hook 端事后确认对端身份。接受这条风险。
+
+所以维持参考实现的形态:**写 `~/.claude/settings.json`,hook 用 `type: "http"` 直连**。
+
+**一条必须处理的遗留**:多个阻塞 hook「最后注册的赢」。我们的计划是把自己的组
+append 到数组末尾,那就意味着**我们的决策会覆盖别家**(本机同时装了 clawd 时就会发生)。
+不赌这个顺序:检测到别家阻塞式 hook 时,默认只装遥测类,决策类要用户显式确认。
 
 ### 降级矩阵
 
@@ -316,14 +330,10 @@ Claude Code 的 `type:http` hook 支持 `headers` 与 `allowedEnvVars`(已核实
 
 ### hook 密钥不写进配置文件,因此也不需要持久化
 
-WS token 默认每次启动随机生成(Jupyter 式),把它写进配置的话 server 一重启已装的
-hook 就全失效。但**密钥根本不需要出现在任何配置文件里**:hook 是 `type: "command"`,
-由 Claude Code spawn 我们自己的二进制,它**直接从自己的环境变量里读** —— 而那份环境
-是 octoterm 在 spawn 这个会话时给的。
-
-(早期方案用 `type: "http"` + header 的 `$VAR` 插值达到同样效果。后来实测发现插件里的
-http hook 根本不触发,转向 command hook,反而更直接:少一层插值机制,也少一个
-「`async: true` 与 header 插值能否共存」的未知数。)
+WS token 默认每次启动随机生成(Jupyter 式),把它写进 `settings.json` 的话 server
+一重启已装的 hook 就全失效。但**密钥根本不需要出现在 settings.json 里** —— 写进去的
+是字面量 `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,取自 Claude 进程的
+环境,而那份环境是 octoterm 在 spawn 这个会话时给的。
 
 于是密钥只需**每个 server 进程启动时随机生成一次、进程内不变**,不落盘、不新增
 状态文件、不触碰「server 不写文件」这条约束的更多部分。会话与 server 进程同生共死,
@@ -362,14 +372,16 @@ Claude 拿不到这两个变量,hook 照样会触发,但请求没有 `Authorizat
 ### 写盘规则
 
 1. **默认关闭**。`agents.install_enabled`,默认 `false`。headless / 共享部署可以
-   永久关掉这个能力。写的虽然是自己的目录,但它会改变全机 Claude 的行为。
-2. **只写我们独占的目录树**,不修改任何别人会写的文件。
+   永久关掉这个能力。
+2. **写前备份**,保留最近 5 份。备份落在 **octoterm 自己的配置目录**,不扔在
+   `~/.claude` 里 —— 那是别人的地方,我们不该往里堆垃圾(参考实现是就地写 `.bak`)。
 3. **原子写**(tmp + rename)。
-4. **卸载 = 删掉那棵树**。删之前必须确认它确实是我们的(里面有我们写的
-   `.claude-plugin/plugin.json` 且 `name` 对得上);对不上宁可报错也不删。
-5. 对**必须**写共用文件的 agent(例如 Codex 的 `~/.codex/hooks.json`,别家也往里写),
-   才回落到「编辑计划 + 所有权判定 + 写前备份」那条更重的路径。那套机制已在
-   Task 2 实现并测试,留给 P2。
+4. **只在用户显式动作时写**,不做「每次 server 启动重写」。Claude Code 自己也会写这个
+   文件(「Yes, and always allow」会往 `permissions` 里加规则),读-改-写的竞态窗口必须
+   只出现在 install / uninstall 这两个时刻,而不是每次启动。
+5. **卸载必须能把文件恢复到「我们没来过」的状态**:某事件的 hooks 数组被清空后,
+   删掉该事件的 key 而不是留一个空数组。已由 Task 2 的
+   `uninstall_restores_original` 与真实结构 fixture 覆盖。
 
 ### 与既有硬约束的关系(裁决)
 
