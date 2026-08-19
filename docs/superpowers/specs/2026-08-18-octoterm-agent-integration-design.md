@@ -232,6 +232,30 @@ prompt_id, session_id, tool_input, tool_name, transcript_path
 **实测不生效**:字符串形态下审批弹窗照常出现,换成对象形态后 TUI 立刻打出
 `Allowed by PermissionRequest hook`。以实测为准,adapter 的 `render()` 按对象形态写。
 
+### 已实测:hook 承载方式的选择(2026-08-19)
+
+| 问题 | 实测结果 |
+| --- | --- |
+| 插件的 `hooks/hooks.json` 支持 `type: "http"` 吗 | **不支持**。同一插件里 `type: "command"` 正常触发,`type: "http"` 一次都不触发 |
+| skills 目录插件会自动加载吗 | **会**。`~/.claude/skills/<name>/` 放 `.claude-plugin/plugin.json` + `hooks/hooks.json`,下次会话直接生效,不需要 install 步骤,不改任何 settings.json |
+| 同一事件多个阻塞式 hook 会怎样 | **全部触发,最后注册的赢**。deny 在前 allow 在后 → 放行;调换顺序 → 拒绝 |
+| 项目级 `<cwd>/.claude/settings.json` 的 hooks 生效吗 | **生效**。测试本功能就该用它,全程不必碰全局配置 |
+
+据此,安装形态定为:**在 `~/.claude/skills/octoterm/` 下写我们独占的一棵目录树,hook 用
+`type: "command"` 指向 octoterm 自己的二进制**(新增 `hook` 子命令)。
+
+这不是绕路,而是更符合本项目定位的形态:我们**不再修改任何用户或别家会写的文件**,
+于是并发写竞态、格式重排、备份垃圾、改端口后失效这四类副作用**在机制上就不存在**;
+目录归我们所有,每次 server 启动重写一遍即可自愈。代价是每个事件多一次极短的进程启动。
+
+顺带还消掉了一条:我们的二进制发现环境里没有 `OCTOTERM_SESSION_ID` 就**立刻退出、
+不联网**,所以非托管会话既不会打来 401,也不会刷爆日志 ——「只管托管会话」这条边界
+的执行点从「服务端拒收」前移到了「客户端不发」。
+
+**遗留**:多个阻塞 hook「最后注册的赢」,而插件与 settings.json 的相对顺序尚未实测。
+这意味着装上我们的 hook 有可能悄悄推翻别家(如 clawd-on-desk)的 deny。不赌顺序:
+检测到别家阻塞式 hook 时,默认只装遥测类,决策类要用户显式确认。
+
 ### 降级矩阵
 
 | 场景 | 处理 | 理由 |
@@ -292,10 +316,14 @@ Claude Code 的 `type:http` hook 支持 `headers` 与 `allowedEnvVars`(已核实
 
 ### hook 密钥不写进配置文件,因此也不需要持久化
 
-WS token 默认每次启动随机生成(Jupyter 式),把它写进 `settings.json` 的话 server
-一重启已装的 hook 就全失效。但**密钥根本不需要出现在 settings.json 里** —— 写进去的
-是字面量 `$OCTOTERM_HOOK_TOKEN`,插值发生在 hook 触发的那一刻,取自 Claude 进程的
-环境,而那份环境是 octoterm 在 spawn 这个会话时给的。
+WS token 默认每次启动随机生成(Jupyter 式),把它写进配置的话 server 一重启已装的
+hook 就全失效。但**密钥根本不需要出现在任何配置文件里**:hook 是 `type: "command"`,
+由 Claude Code spawn 我们自己的二进制,它**直接从自己的环境变量里读** —— 而那份环境
+是 octoterm 在 spawn 这个会话时给的。
+
+(早期方案用 `type: "http"` + header 的 `$VAR` 插值达到同样效果。后来实测发现插件里的
+http hook 根本不触发,转向 command hook,反而更直接:少一层插值机制,也少一个
+「`async: true` 与 header 插值能否共存」的未知数。)
 
 于是密钥只需**每个 server 进程启动时随机生成一次、进程内不变**,不落盘、不新增
 状态文件、不触碰「server 不写文件」这条约束的更多部分。会话与 server 进程同生共死,
@@ -334,11 +362,14 @@ Claude 拿不到这两个变量,hook 照样会触发,但请求没有 `Authorizat
 ### 写盘规则
 
 1. **默认关闭**。`agents.install_enabled`,默认 `false`。headless / 共享部署可以
-   永久关掉这个能力。
-2. **写前备份**,保留最近 5 份。
+   永久关掉这个能力。写的虽然是自己的目录,但它会改变全机 Claude 的行为。
+2. **只写我们独占的目录树**,不修改任何别人会写的文件。
 3. **原子写**(tmp + rename)。
-4. **卸载必须能把文件恢复到「我们没来过」的状态**:某事件的 hooks 数组被清空后,
-   删掉该事件的 key 而不是留一个空数组。
+4. **卸载 = 删掉那棵树**。删之前必须确认它确实是我们的(里面有我们写的
+   `.claude-plugin/plugin.json` 且 `name` 对得上);对不上宁可报错也不删。
+5. 对**必须**写共用文件的 agent(例如 Codex 的 `~/.codex/hooks.json`,别家也往里写),
+   才回落到「编辑计划 + 所有权判定 + 写前备份」那条更重的路径。那套机制已在
+   Task 2 实现并测试,留给 P2。
 
 ### 与既有硬约束的关系(裁决)
 
