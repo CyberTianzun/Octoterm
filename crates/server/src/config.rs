@@ -52,6 +52,17 @@ pub struct AgentsConfig {
     pub session_stale_secs: u64,
     #[serde(default = "default_working_stale")]
     pub working_stale_secs: u64,
+    /// 一个挂起请求最多等多久。
+    ///
+    /// 必须**小于**写进 hook 里的 `timeout`(600 秒),这样超时是我们主动写一个
+    /// 「无决定」的响应,而不是让 Claude 那头自己超时 —— 两者行为一样,但前者
+    /// 我们知道发生了什么,能记日志、能把状态改回去。
+    #[serde(default = "default_pending_timeout")]
+    pub pending_timeout_secs: u64,
+}
+
+fn default_pending_timeout() -> u64 {
+    590
 }
 
 fn default_session_stale() -> u64 {
@@ -68,6 +79,7 @@ impl Default for AgentsConfig {
             install_enabled: false,
             session_stale_secs: default_session_stale(),
             working_stale_secs: default_working_stale(),
+            pending_timeout_secs: default_pending_timeout(),
         }
     }
 }

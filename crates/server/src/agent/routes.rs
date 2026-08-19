@@ -17,6 +17,7 @@ use axum::extract::{ConnectInfo, Path};
 use crate::agent::apply::{apply, default_backup_dir, ApplyError, ApplyOpts};
 use crate::agent::detect::DetectEnv;
 use crate::agent::edit::{ConfigEdit, EditOp, InstallCtx};
+use crate::agent::store::{AgentSessionStore, AnswerResult, Decision, PendingRequest, Update};
 use crate::app::{bearer_ok, AppState};
 
 /// `GET /api/agents` —— 本机装了哪些 agent、我方集成是什么状态。
@@ -224,20 +225,140 @@ pub async fn hook(
     };
 
     let event = crate::agent::edit::event_of_slug(&event_slug);
-    let Some(update) = adapter.parse(&event, &payload) else {
-        // 认不出的事件:收下,忽略,回 200。不认识不是错误。
-        tracing::debug!(agent = %agent, event = %event, "忽略未知 hook 事件");
-        return StatusCode::OK.into_response();
-    };
-
     let agent_session_id = payload
         .get("session_id")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("default")
         .to_string();
 
+    if adapter.is_blocking(&event) {
+        return blocking_hook(&state, adapter.as_ref(), &agent_session_id, session, &payload).await;
+    }
+
+    let Some(update) = adapter.parse(&event, &payload) else {
+        // 认不出的事件:收下,忽略,回 200。不认识不是错误。
+        tracing::debug!(agent = %agent, event = %event, "忽略未知 hook 事件");
+        return StatusCode::OK.into_response();
+    };
+
     let snapshot =
         state.agent_sessions.apply(adapter.id(), &agent_session_id, Some(session), update);
     state.manager.publish(snapshot.to_msg());
     StatusCode::OK.into_response()
+}
+
+/// 挂起项的看守。
+///
+/// **这是本功能里最容易漏掉的一件事**:agent 侧断开连接(它超时了、崩了、用户
+/// Ctrl-C 了)时,axum 会把这个 handler 的 future 直接丢掉 —— `await` 之后的代码
+/// 一行都不会跑。只有 `Drop` 能保证挂起项被摘掉,否则它会一直挂到 590 秒,而客户端
+/// 上会显示一个永远等不到答复的「有事找你」。
+struct PendingGuard {
+    store: std::sync::Arc<AgentSessionStore>,
+    id: String,
+}
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        self.store.remove_pending(&self.id);
+    }
+}
+
+async fn blocking_hook(
+    state: &AppState,
+    adapter: &dyn crate::agent::AgentAdapter,
+    agent_session_id: &str,
+    session: u64,
+    payload: &serde_json::Value,
+) -> Response {
+    // 先确保会话存在(不改状态),挂起项才有地方挂
+    state.agent_sessions.apply(
+        adapter.id(),
+        agent_session_id,
+        Some(session),
+        Update::default(),
+    );
+
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let meta = PendingRequest {
+        id: id.clone(),
+        agent_id: adapter.id().to_string(),
+        agent_session_id: agent_session_id.to_string(),
+        session: Some(session),
+        tool_name: payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string),
+        tool_input: payload.get("tool_input").cloned().unwrap_or(serde_json::Value::Null),
+        created_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    };
+
+    let rx = state.agent_sessions.insert_pending(meta);
+    let guard = PendingGuard { store: state.agent_sessions.clone(), id: id.clone() };
+    if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
+        state.manager.publish(s.to_msg());
+    }
+
+    // 我们的超时必须短于写进 hook 的那个(600 秒):超时由我们主动写「无决定」,
+    // 而不是让 Claude 那头自己超时 —— 行为一样,但这样我们知道发生了什么。
+    let wait = std::time::Duration::from_secs(state.agents.pending_timeout_secs);
+    let decision = match tokio::time::timeout(wait, rx).await {
+        Ok(Ok(d)) => d,
+        // 超时,或者答复端被丢弃 —— 一律「无决定」,绝不代替用户 allow/deny
+        _ => {
+            tracing::info!(pending = %id, "挂起请求未获答复,回落为无决定");
+            Decision::NoDecision
+        }
+    };
+    drop(guard);
+    if let Some(s) = state.agent_sessions.snapshot(adapter.id(), agent_session_id) {
+        state.manager.publish(s.to_msg());
+    }
+    Json(adapter.render(&decision)).into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct AnswerBody {
+    pub pending_id: String,
+    /// `"allow"` | `"deny"`。其他值一律 400 —— 不猜。
+    pub decision: String,
+    #[serde(default)]
+    pub message: Option<String>,
+}
+
+/// `GET /api/agents/pending` —— 当前有哪些请求在等人。
+pub async fn pending(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    Json(serde_json::json!({ "pending": state.agent_sessions.list_pending() })).into_response()
+}
+
+/// `POST /api/agents/answer` —— 替 agent 拍板。
+///
+/// 走 HTTP 而不是控制消息:新增 client→server 消息类型按 X3 是破坏性变更,要 bump
+/// proto 并让所有已打开的页面全断。`pending_id` 就是协议 C5 说的「自然键」。
+pub async fn answer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<AnswerBody>,
+) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    let decision = match body.decision.as_str() {
+        "allow" => Decision::Allow { message: body.message },
+        "deny" => Decision::Deny { message: body.message },
+        other => {
+            return (StatusCode::BAD_REQUEST, format!("unknown decision: {other}")).into_response()
+        }
+    };
+    match state.agent_sessions.answer(&body.pending_id, decision) {
+        AnswerResult::Ok => StatusCode::OK.into_response(),
+        AnswerResult::NotFound => (StatusCode::NOT_FOUND, "no such pending request").into_response(),
+        // 重复提交与「请求不存在」对客户端是两件事,不能混成同一个码
+        AnswerResult::AlreadyAnswered => {
+            (StatusCode::CONFLICT, "already answered").into_response()
+        }
+    }
 }

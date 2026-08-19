@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use super::detect::{self, DetectEnv};
 use super::edit::{is_ours, slug_of_event, ConfigEdit, EditOp, InstallCtx};
-use super::store::Update;
+use super::store::{Decision, Update};
 use super::{AgentAdapter, Confidence, Detected, Integration};
 use octoterm_protocol::AgentState;
 
@@ -177,6 +177,39 @@ impl AgentAdapter for ClaudeCode {
             cwd: str_field(body, "cwd"),
             title: str_field(body, "session_title"),
         })
+    }
+
+    fn is_blocking(&self, event: &str) -> bool {
+        BLOCKING.contains(&event)
+    }
+
+    /// **`decision` 是对象,不是字符串。**
+    ///
+    /// 调研阶段拿到的二手资料说它是 `"allow"|"deny"|"escalate"|"ask"` 字符串,实测
+    /// 不生效 —— 字符串形态下审批弹窗照常出现,换成对象形态后 TUI 立刻打出
+    /// `Allowed by PermissionRequest hook`。以实测为准。
+    ///
+    /// 「无决定」返回空对象:官方文档写明「2xx + 空 body = 成功且无输出」,Claude 会
+    /// 回落到它自己的审批弹窗。这正是我们要的降级 —— 把选择权交还给终端前的人。
+    fn render(&self, decision: &Decision) -> Value {
+        let d = match decision {
+            Decision::NoDecision => return json!({}),
+            Decision::Allow { message } => {
+                let mut o = json!({ "behavior": "allow" });
+                if let Some(m) = message {
+                    o["message"] = json!(m);
+                }
+                o
+            }
+            Decision::Deny { message } => {
+                let mut o = json!({ "behavior": "deny" });
+                if let Some(m) = message {
+                    o["message"] = json!(m);
+                }
+                o
+            }
+        };
+        json!({ "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": d } })
     }
 
     fn integration(&self, ctx: &InstallCtx) -> (Integration, Vec<String>) {

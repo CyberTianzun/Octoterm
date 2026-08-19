@@ -28,6 +28,18 @@ pub async fn start_test_server_at(
     window_size: WindowSize,
     specs: Vec<octoterm_server::config::LauncherSpec>,
 ) -> std::net::SocketAddr {
+    start_test_server_with_agents(token, cap, window_size, specs, Default::default()).await
+}
+
+/// 同上,但可以指定 `[agents]` —— 挂起请求的超时必须能在测试里调短。
+#[allow(dead_code)]
+pub async fn start_test_server_with_agents(
+    token: &str,
+    cap: usize,
+    window_size: WindowSize,
+    specs: Vec<octoterm_server::config::LauncherSpec>,
+    agents: octoterm_server::config::AgentsConfig,
+) -> std::net::SocketAddr {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let state = AppState {
@@ -35,7 +47,7 @@ pub async fn start_test_server_at(
         token: token.into(),
         launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&specs)),
         listen_port: addr.port(),
-        agents: Default::default(),
+        agents,
         agent_sessions: std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new()),
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });

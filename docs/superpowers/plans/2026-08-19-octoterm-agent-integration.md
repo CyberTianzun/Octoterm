@@ -703,7 +703,7 @@ cmd.env("OCTOTERM_HOOK_TOKEN", hook_token);
 - Produces:
   - `POST /api/agents/answer` body `{ pending_id, decision: "allow"|"deny", message? }`
 
-- [ ] **Step 1: 写失败的测试 —— 三条终结路径都要覆盖**
+- [x] **Step 1: 写失败的测试 —— 三条终结路径都要覆盖**
 
 ```rust
 #[tokio::test] async fn 用户回答后_hook_拿到决策() {}
@@ -714,7 +714,7 @@ cmd.env("OCTOTERM_HOOK_TOKEN", hook_token);
 
 **第三条是本 task 的核心**:axum 的 handler future 在连接关闭时会被 drop。挂起项必须靠 `Drop` guard 摘除,而不是靠超时兜底 —— 否则一个崩掉的 agent 会把条目留到 600 秒。
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 ```rust
 struct PendingGuard { store: Arc<AgentSessionStore>, id: PendingId }
@@ -744,15 +744,58 @@ match rx.await {
 
 `decision` 是**对象**不是字符串 —— 字符串形态实测不生效。
 
-- [ ] **Step 3: 降级**
+- [x] **Step 3: 降级**
 
 按 spec 的降级矩阵实现。**不为 headless 写特殊分支**(实测 `-p` 下该事件根本不触发)。原则:宁可无决定,也不代替用户 allow/deny。
 
-- [ ] **Step 4: 验证**
+- [x] **Step 4: 验证**
 
 四条测试全绿。手工端到端:托管会话里让 claude 跑一条需要授权的命令 → 浏览器出现「等你回答」→ 点允许 → 终端里命令执行,TUI 打出 `Allowed by PermissionRequest hook`。
 
 ---
+
+
+---
+
+## 实施记录:Task 6(2026-08-19,已完成)
+
+`agent_pending` 7 个用例,`cargo test --workspace` 239 通过 0 失败,clippy 干净。
+
+**端到端跑通了完整回路**(真实 Claude,交互式会话由 pty 驱动,"远程客户端"用 curl 扮演):
+
+```
+挂起请求: f309b1cc | 工具: Bash | 入参: {"command": "touch ./marker-loop", ...}
+会话状态: waiting | pending: f309b1cc
+客户端回答 allow → 200
+Claude 那头: ⎿ Allowed by PermissionRequest hook    marker 文件已创建
+```
+
+也就是说:Claude 请求授权 → octoterm 把 HTTP 响应挂起 → 客户端看到挂起请求和确切命令
+→ 回答 → Claude 继续执行。这是这个功能的全部意义所在。
+
+**核心是那个 `Drop` guard**,`agent_disconnect_clears_the_pending_entry` 专门测它:agent 侧
+断开时 axum 直接丢掉 handler 的 future,`await` 之后一行都不会跑。只有 `Drop` 能保证挂起项
+被摘掉,否则它会一直挂到 590 秒,而客户端上显示一个永远等不到答复的「有事找你」。
+
+**测试逼出来的一个设计**:`second_answer_is_conflict_not_found` 第一次跑是红的 —— 拿到 404
+而不是 409。原因是用户答完之后 handler 立刻醒来、写响应、guard 摘掉条目,中间只有微秒级
+窗口。修法不是去缩小那个窗口,而是**记住最近答过的 64 个 id**:客户端因为网络抖动重试一次,
+应当拿到「你已经答过了」而不是「这个请求根本不存在」—— 这两件事对客户端不是一回事。
+
+**降级严格遵守「宁可不作决定」**:超时、没人连着、答复端被丢弃,一律返回空对象 `{}`。
+按官方文档「2xx + 空 body = 成功且无输出」,Claude 会回落到它自己的审批弹窗 —— 把选择权
+交还给终端前的人,而不是替他 deny。`timeout_falls_back_to_no_decision` 断言的就是这个,
+断言的是 `{}` 而不是 deny。
+
+**`render()` 用的是实测形态**:`decision` 是**对象** `{behavior, message?}`,不是字符串。
+调研阶段的二手资料说是字符串,实测不生效(弹窗照常出现)。
+
+**新增**:`hook_token()` 支持用同名环境变量固定。端到端测试需要外部起的 Claude 拿到和
+server 一致的值;对想固定的部署也有用。不设时仍是每进程随机。
+
+**踩到的一个坑(与代码无关但值得记)**:第一次端到端全程静默,一个 hook 都没打进来 ——
+新建的测试目录触发了 Claude 的工作区信任对话框,交互式会话卡在那里。先用 `claude -p`
+跑一次建立信任,再驱动交互式会话就正常了。
 
 ### Task 7: stale 清理
 

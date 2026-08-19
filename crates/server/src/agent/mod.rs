@@ -84,6 +84,12 @@ pub trait AgentAdapter: Send + Sync {
     /// **不认识的事件返回 `None`,当作忽略而不是错误** —— agent 升级会带来新事件,
     /// 不能因为多了一个事件名就 500,更不能因此把 Claude 卡住。
     fn parse(&self, event: &str, body: &serde_json::Value) -> Option<store::Update>;
+
+    /// 这个事件是不是「阻塞式」的 —— agent 会挂在 socket 上等我们写响应。
+    fn is_blocking(&self, event: &str) -> bool;
+
+    /// 把统一决策渲染回 agent 方言的响应体。
+    fn render(&self, decision: &store::Decision) -> serde_json::Value;
 }
 
 pub fn registry() -> Vec<Box<dyn AgentAdapter>> {

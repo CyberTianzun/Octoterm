@@ -38,6 +38,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/agents/{id}/install", post(crate::agent::routes::install))
         .route("/api/agents/{id}/uninstall", post(crate::agent::routes::uninstall))
         .route("/api/agents/sessions", get(crate::agent::routes::sessions))
+        .route("/api/agents/pending", get(crate::agent::routes::pending))
+        .route("/api/agents/answer", post(crate::agent::routes::answer))
         .route(
             "/hook/{agent}/{event}",
             post(crate::agent::routes::hook)
