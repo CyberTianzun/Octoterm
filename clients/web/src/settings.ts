@@ -499,6 +499,10 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
         head.append(el("span", "agent-badge", badge));
         card.append(head);
         card.append(el("div", "set-hint", a.detected.detail));
+        // 「装完还要做一步」和「冲突」是两回事,分开显示 —— 前者是流程,后者是风险
+        if (a.activation === "codex-hooks-review") {
+          card.append(el("div", "agent-activation", t("agent.activation.codex-hooks-review")));
+        }
         for (const c of a.conflicts) card.append(el("div", "agent-conflict", c));
         if (a.conflicts.length > 0) card.append(el("div", "set-hint", t("agent.conflictNote")));
 

@@ -176,6 +176,11 @@ export interface AgentStatus {
   detected: { installed: boolean; confidence: string; reason: string; detail: string };
   /** "not-installed" | "installed" | "stale-port" */
   integration: string;
+  /**
+   * 装完还需要用户做什么才生效。机器可读的键,文案在客户端。
+   * `null` = 装完即生效。
+   */
+  activation: string | null;
   /** 同一事件上别家的阻塞式 hook。不是错误,但要让用户看见 */
   conflicts: string[];
 }

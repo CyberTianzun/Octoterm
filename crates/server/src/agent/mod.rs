@@ -14,8 +14,10 @@ use std::path::PathBuf;
 
 pub mod apply;
 pub mod claude_code;
+pub mod codex;
 pub mod detect;
 pub mod edit;
+pub mod hook_cli;
 pub mod routes;
 pub mod store;
 
@@ -59,6 +61,13 @@ pub struct AgentStatus {
     pub name: &'static str,
     pub detected: Detected,
     pub integration: Integration,
+    /// 装完之后还需要用户做什么才生效。**机器可读的键**,不是文案 —— 文案由客户端
+    /// 按自己的语言渲染(和 `detected.reason` 同一个路子)。
+    ///
+    /// 目前只有 Codex 有:它用 `trusted_hash` 逐条门控 hook,必须由用户在它自己的
+    /// TUI 里 review 过才生效。这一步没法自动化,也**不该**自动化 —— 那道闸防的正是
+    /// 「第三方悄悄让 Codex 执行任意命令」,而我们恰好就是那个第三方。
+    pub activation: Option<&'static str>,
     /// 同一事件上发现的**别人的**阻塞式 hook,一行一条人类可读描述。
     ///
     /// 不是错误,也不会被我们删掉 —— 但两个阻塞 hook 抢同一个事件是真实的互操作
@@ -79,6 +88,11 @@ pub trait AgentAdapter: Send + Sync {
     /// 只读地看一眼当前集成状态。读不到 / 读坏了一律当作没装。
     fn integration(&self, ctx: &edit::InstallCtx) -> (Integration, Vec<String>);
 
+    /// 装完之后还需要用户做什么才生效。返回机器可读的键,`None` 表示装完即生效。
+    fn activation(&self) -> Option<&'static str> {
+        None
+    }
+
     /// 把 agent 方言的 hook payload 归一化成统一更新。
     ///
     /// **不认识的事件返回 `None`,当作忽略而不是错误** —— agent 升级会带来新事件,
@@ -93,7 +107,7 @@ pub trait AgentAdapter: Send + Sync {
 }
 
 pub fn registry() -> Vec<Box<dyn AgentAdapter>> {
-    vec![Box::new(claude_code::ClaudeCode)]
+    vec![Box::new(claude_code::ClaudeCode), Box::new(codex::Codex)]
 }
 
 pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
@@ -112,6 +126,7 @@ pub fn scan(env: &detect::DetectEnv, port: u16) -> Vec<AgentStatus> {
                 name: a.name(),
                 detected: a.detect(env),
                 integration,
+                activation: a.activation(),
                 conflicts,
             }
         })

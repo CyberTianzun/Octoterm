@@ -146,7 +146,8 @@ impl AgentAdapter for ClaudeCode {
                 path: path.clone(),
                 op: EditOp::EnsureHook {
                     event: event.to_string(),
-                    spec: hook_spec(ctx.port, event, blocking),
+                    // Claude Code 的 group 带 matcher(空串 = 匹配全部)
+                    group: json!({ "matcher": "", "hooks": [hook_spec(ctx.port, event, blocking)] }),
                 },
             })
             .collect())

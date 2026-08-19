@@ -417,3 +417,6 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 /* 路径要能整条看清 —— 用户判断「你要动我哪个文件」全靠它,不省略 */
 .agent-path { font-family: monospace; word-break: break-all; opacity: 0.9; }
 .agent-events { opacity: 0.75; margin: 2px 0 6px; }
+
+/* 「装完还要做一步」:是流程提示,不是风险,所以用中性色而不是警示色 */
+.agent-activation { font-size: 12px; opacity: 0.85; margin-top: 4px; }

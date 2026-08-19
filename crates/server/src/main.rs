@@ -3,9 +3,23 @@ use octoterm_server::app::{serve, AppState};
 use octoterm_server::config::{Config, WindowSize};
 use octoterm_server::session::manager::SessionManager;
 
+#[derive(clap::Subcommand)]
+enum Cmd {
+    /// agent 的 hook 回调客户端(由装进 agent 配置里的 hook 调用,不是给人敲的)。
+    ///
+    /// 只有不支持 http 型 hook 的 agent(如 Codex)需要它:那边只能执行一个命令,
+    /// 于是让它执行我们自己,由我们转发到本地 server。
+    Hook {
+        /// `http://127.0.0.1:<port>/hook/<agent>/<event>`
+        url: String,
+    },
+}
+
 #[derive(Parser)]
 #[command(name = "octoterm-server", about = "octoterm terminal session daemon")]
 struct Args {
+    #[command(subcommand)]
+    cmd: Option<Cmd>,
     /// 配置文件路径(缺省用平台配置目录)
     #[arg(long)]
     config: Option<std::path::PathBuf>,
@@ -25,6 +39,12 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // hook 子命令要在**一切之前**处理:它由 agent 在每个事件上同步调用,必须快、
+    // 必须安静。初始化日志、读配置、起 runtime 对它都是纯负担,而任何一行多余的
+    // stdout 输出都会被 agent 当成决策读走。
+    if let Some(Cmd::Hook { url }) = Args::parse().cmd {
+        std::process::exit(octoterm_server::agent::hook_cli::run(&url));
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

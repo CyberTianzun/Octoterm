@@ -919,3 +919,35 @@ JSON:那是给机器看的,一屏塞不下,而用户真正要判断的是「你�
 - [ ] server 停掉时,Claude Code 仍然正常可用(实测已证明是 non-blocking,回归时复验一次)
 - [ ] octoterm 之外启动的 claude,其 hook 请求被 401 拒收
 - [ ] `docs/protocol.md` 与 README 的路线图第 2 条同步更新
+
+
+---
+
+## 实施记录:P2 Codex adapter(2026-08-19,已完成)
+
+`agent_codex` 9 个用例,全量 261 用例 0 失败,clippy 干净。本机真实检测两个 agent 都正确,
+且 Codex 的冲突(clawd 的 hook)与 `/hooks` 提示都报了出来。
+
+**实测先行,推翻了两条二手资料**(详见 spec「Codex(已实测,风险澄清)」):
+
+- `hooks` 已是 stable 且默认开启,**不用**再写 `[features] hooks = true`(clawd 还在写);
+- **Codex 不支持 `type: "http"`** —— 二进制里 `HookHandlerConfig` 只有
+  command / prompt / agent 三个变体。
+
+于是新增了 `octoterm-server hook <url>` 子命令:Codex 那边只能执行一个命令,就让它执行
+octoterm 自己。**没有引入 HTTP 客户端依赖** —— 目标永远是 127.0.0.1、请求形状完全固定,
+手写几十行 HTTP/1.1 POST 比拖进一个通用客户端更符合本项目的定位。
+
+hook 子命令的三条防线,顺序就是防线的顺序:环境里没有那两个变量就立刻退出**不联网**;
+任何失败都静默 exit 0 **且不打印**(不打印 = 无决定,agent 回落到自己的审批流程);
+非 2xx 当作空 body,绝不把错误页当决策打出去。三条都有测试,其中两条是真的 spawn 那个
+二进制跑出来的。
+
+**`trusted_hash` 不伪造**:Codex 逐条门控 hook,必须用户在它自己的 TUI 里 `/hooks` review
+过才生效。那道闸防的正是「第三方悄悄让 Codex 执行任意命令」,而我们恰好就是那个第三方。
+新增 `AgentStatus.activation`(机器可读的键,文案在客户端)把这一步告诉用户。
+
+**顺手做对的一件事**:`EditOp::EnsureHook` 从「携带 hook」改成「携带整个 group」——
+Claude Code 的 group 带 `matcher`,Codex 的不带,这个差异属于 adapter 而不属于编辑引擎。
+所有权判定也统一了:一个概念(URL 指向我们),两种承载(http 型看 `url`,command 型看
+命令串里的那个 URL)。

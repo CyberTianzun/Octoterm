@@ -81,6 +81,7 @@ const zh = {
   "agent.previewAdd": "写入这些事件的 hook:",
   "agent.previewRemove": "移除这些事件的 hook:",
   "agent.previewTelemetryOnly": "只装状态上报,不装授权拦截(见上方冲突)",
+  "agent.activation.codex-hooks-review": "装好之后还要在 Codex 里执行 /hooks 审核一遍才会生效 —— 这是 Codex 自己的安全闸,只能由你来点头",
   "session.empty": "还没有会话,点右上角 + 新建",
 
   /* ---------- 新建会话菜单 ---------- */
@@ -228,6 +229,7 @@ const en: Record<MsgKey, string> = {
   "agent.previewAdd": "Hooks written for these events:",
   "agent.previewRemove": "Hooks removed for these events:",
   "agent.previewTelemetryOnly": "Status reporting only, no approval interception (see the conflict above)",
+  "agent.activation.codex-hooks-review": "After installing, run /hooks inside Codex to review them — that gate is Codex's own, and only you can clear it",
   "session.empty": "No sessions yet — use + above to start one",
 
   "ns.filter": "Filter…",

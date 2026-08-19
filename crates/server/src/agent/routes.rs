@@ -41,7 +41,7 @@ pub async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response
 /// (R13:客户端中立)。
 fn describe(e: &ConfigEdit) -> serde_json::Value {
     let (action, event, spec) = match &e.op {
-        EditOp::EnsureHook { event, spec } => ("ensure", event, Some(spec.clone())),
+        EditOp::EnsureHook { event, group } => ("ensure", event, Some(group.clone())),
         EditOp::RemoveOurs { event } => ("remove", event, None),
     };
     serde_json::json!({

@@ -36,14 +36,17 @@ pub struct ConfigEdit {
 #[derive(Debug, Clone)]
 pub enum EditOp {
     /// 保证该事件下**恰好有一条**我方 hook,其余条目原样不动。
-    EnsureHook { event: String, spec: Value },
+    ///
+    /// 带的是整个 group 而不只是 hook 本身:各家的 group 形状不一样(Claude Code 有
+    /// `matcher`,Codex 的实际配置里没有),这个差异属于 adapter,不属于这里。
+    EnsureHook { event: String, group: Value },
     /// 删掉该事件下所有我方 hook;被我们清空的组一并删掉,事件键空了也删掉。
     RemoveOurs { event: String },
 }
 
 pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
     match op {
-        EditOp::EnsureHook { event, spec } => ensure(doc, event, spec),
+        EditOp::EnsureHook { event, group } => ensure(doc, event, group),
         EditOp::RemoveOurs { event } => {
             remove_ours(doc, event);
             Ok(())
@@ -51,7 +54,7 @@ pub fn apply_to_json(doc: &mut Value, op: &EditOp) -> Result<()> {
     }
 }
 
-fn ensure(doc: &mut Value, event: &str, spec: &Value) -> Result<()> {
+fn ensure(doc: &mut Value, event: &str, group: &Value) -> Result<()> {
     // 先摘干净再写入 —— 幂等就是从这一行来的
     remove_ours(doc, event);
     let obj = doc.as_object_mut().context("配置根不是 JSON 对象")?;
@@ -65,7 +68,7 @@ fn ensure(doc: &mut Value, event: &str, spec: &Value) -> Result<()> {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .with_context(|| format!("`hooks.{event}` 不是数组"))?;
-    groups.push(json!({ "matcher": "", "hooks": [spec] }));
+    groups.push(group.clone());
     Ok(())
 }
 
@@ -126,11 +129,17 @@ struct OurUrl {
 
 /// 只认 `http://127.0.0.1:<port>/hook/<agent>/<event>`,且不带 query / fragment /
 /// 凭据。任何一处不符都不是我们的。
+///
+/// 两种承载都认:`type: "http"` 的 `url` 字段(Claude Code),和 `type: "command"` 的
+/// 命令串里出现的同一个 URL(Codex —— 它不支持 http 型 hook,只能由我们自己的二进制
+/// 转发)。一个所有权概念,两种传输。
 fn our_url(hook: &Value) -> Option<OurUrl> {
-    if hook.get("type").and_then(Value::as_str) != Some("http") {
-        return None;
-    }
-    let url = hook.get("url").and_then(Value::as_str)?;
+    let raw = match hook.get("type").and_then(Value::as_str)? {
+        "http" => hook.get("url").and_then(Value::as_str)?.to_string(),
+        "command" => url_in_command(hook.get("command").and_then(Value::as_str)?)?,
+        _ => return None,
+    };
+    let url = raw.as_str();
     if url.contains('?') || url.contains('#') || url.contains('@') {
         return None;
     }
@@ -143,6 +152,16 @@ fn our_url(hook: &Value) -> Option<OurUrl> {
         return None;
     }
     Some(OurUrl { port })
+}
+
+/// 从命令串里挑出我们的 URL。命令串形如
+/// `"/path/to/octoterm-server" hook http://127.0.0.1:7683/hook/codex/stop`,
+/// 按空白切开找那个 token 就够了 —— URL 里不会有空白。
+fn url_in_command(cmd: &str) -> Option<String> {
+    cmd.split_whitespace()
+        .map(|t| t.trim_matches(|c| c == '"' || c == '\''))
+        .find(|t| t.starts_with("http://127.0.0.1:"))
+        .map(str::to_string)
 }
 
 fn is_slug(s: &str) -> bool {

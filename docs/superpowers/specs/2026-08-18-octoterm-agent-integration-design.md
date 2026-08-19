@@ -475,7 +475,28 @@ octoterm 不是。用户随手起停 server,而 hook 一旦写进 `settings.json
 2. 安装 UI 必须说明这个副作用,不能只显示「已安装」。
 3. `GET /api/agents` 返回自检项:「已安装但 server 未运行」要能被检出并提示。
 
-### 🟠 Codex 侧资料互相矛盾,且装完不自动生效
+### 🟠 Codex(已实测,风险澄清)
+
+**2026-08-19 用 codex-cli 0.147.0 实测,澄清了此前互相矛盾的资料**:
+
+| 问题 | 实测结果 | 证据 |
+| --- | --- | --- |
+| hooks 要不要开 feature | **不用**,`hooks` 已经是 `stable` 且默认 `true` | `codex features list` |
+| 支持 `type: "http"` 吗 | **不支持**。`HookHandlerConfig` 只有 command / prompt / agent | codex 二进制里的类型名(`HookHandlerConfig::Command` / `::Prompt` / `::Agent`) |
+| 配置在哪、什么形状 | `~/.codex/hooks.json`,`{"hooks":{"<Event>":[{"hooks":[…]}]}}`,group **不带 matcher** | 本机上被 Codex 接受并信任过的那份 |
+| 装了就生效吗 | **不生效**。逐条 `trusted_hash` 门控 | `~/.codex/config.toml` 里的 `[hooks.state."<path>:<event_snake>:<组>:<条>"] trusted_hash = "sha256:…"` |
+| 空 CODEX_HOME 下装 hook 会怎样 | 一个都不触发(没有 trusted_hash) | 实测:12 个候选事件全部静默 |
+
+两条结论直接改变了设计:
+
+1. **必须有 `hook` 子命令**。Codex 只能执行一个命令,所以让它执行 octoterm 自己的二进制,
+   由那个进程转发到本地 server。不引入 HTTP 客户端依赖 —— 目标永远是 127.0.0.1、请求形状
+   完全固定,手写几十行 HTTP/1.1 POST 比拖进一个通用客户端更符合「单个小体积静态二进制」。
+2. **`trusted_hash` 绝不伪造**。那道闸防的正是「第三方悄悄让 Codex 执行任意命令」,
+   而我们恰好就是那个第三方。装完之后由 UI 明确告诉用户去 Codex 里跑 `/hooks`,
+   通过 `AgentStatus.activation`(机器可读的键,文案在客户端)传达。
+
+### 🟠 (历史)Codex 侧资料互相矛盾,且装完不自动生效
 
 官方 `docs/config.md` 只提到 lifecycle hooks 与 `allow_managed_hooks_only`;社区
 资料一说 11 个事件、一说只有 `PreToolUse`/`PostToolUse` 且只认 `deny`、不支持 http
