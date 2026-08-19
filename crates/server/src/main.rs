@@ -55,5 +55,6 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
     }
     let listen_port = listener.local_addr()?.port();
-    serve(listener, AppState { manager, token, launchers, listen_port }).await
+    let agents = config.agents;
+    serve(listener, AppState { manager, token, launchers, listen_port, agents }).await
 }

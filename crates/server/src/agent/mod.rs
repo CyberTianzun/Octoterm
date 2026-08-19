@@ -12,6 +12,7 @@
 use serde::Serialize;
 use std::path::PathBuf;
 
+pub mod apply;
 pub mod claude_code;
 pub mod detect;
 pub mod edit;
@@ -88,7 +89,7 @@ pub fn find(id: &str) -> Option<Box<dyn AgentAdapter>> {
 
 /// 扫描所有 adapter。单个 adapter 的失败只影响它自己那一条(局部失败原则)。
 pub fn scan(env: &detect::DetectEnv, port: u16) -> Vec<AgentStatus> {
-    let ctx = edit::InstallCtx { home: env.home.clone(), port };
+    let ctx = edit::InstallCtx { home: env.home.clone(), port, include_blocking: true };
     registry()
         .into_iter()
         .map(|a| {

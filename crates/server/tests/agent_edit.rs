@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 const PORT: u16 = 7683;
 
 fn ctx() -> InstallCtx {
-    InstallCtx { home: "/home/u".into(), port: PORT }
+    InstallCtx { home: "/home/u".into(), port: PORT, include_blocking: true }
 }
 
 fn run(doc: &mut Value, edits: Vec<ConfigEdit>) {

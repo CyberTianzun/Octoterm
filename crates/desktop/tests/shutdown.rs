@@ -21,7 +21,7 @@ fn long_lived_cmd() -> Option<Vec<String>> {
 
 #[tokio::test]
 async fn shutdown_kills_every_session() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
 
     let a = sup.manager().create(None, long_lived_cmd(), None).unwrap();
@@ -57,7 +57,7 @@ async fn shutdown_kills_every_session() {
 /// 没有会话时 shutdown 也得干净收尾,不能 panic。
 #[tokio::test]
 async fn shutdown_without_sessions_is_a_noop() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
     shutdown(&mut sup);
     assert!(sup.listen().is_none());

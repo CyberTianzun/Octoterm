@@ -30,14 +30,22 @@ struct Running {
 pub struct Supervisor {
     manager: Arc<SessionManager>,
     launchers: Arc<Vec<Box<dyn LauncherProvider>>>,
+    /// `[agents]` 配置。装 hook 的门控在这里,重建 HTTP 层时原样带过去。
+    agents: octoterm_server::config::AgentsConfig,
     running: Option<Running>,
 }
 
 impl Supervisor {
-    pub fn new(buffer_cap: usize, window_size: WindowSize, specs: &[LauncherSpec]) -> Self {
+    pub fn new(
+        buffer_cap: usize,
+        window_size: WindowSize,
+        specs: &[LauncherSpec],
+        agents: octoterm_server::config::AgentsConfig,
+    ) -> Self {
         Self {
             manager: SessionManager::new(buffer_cap, window_size),
             launchers: Arc::new(octoterm_server::launcher::providers(specs)),
+            agents,
             running: None,
         }
     }
@@ -111,6 +119,7 @@ impl Supervisor {
             token: token.clone(),
             launchers: self.launchers.clone(),
             listen_port: actual.port(),
+            agents: self.agents,
         };
         let join = tokio::spawn(async move {
             if let Err(e) = serve(listener, state).await {

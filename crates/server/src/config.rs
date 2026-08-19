@@ -39,6 +39,39 @@ pub struct LauncherSpec {
     pub cwd: Option<String>,
 }
 
+/// `[agents]` —— agent 集成。
+///
+/// `install_enabled` **默认关**:装 hook 会改用户的 `~/.claude/settings.json`,
+/// 并且改变这台机器上所有 Claude 会话的行为。这种事必须是显式选择,不能因为
+/// 「跑起来了」就自动发生。headless / 共享部署可以把它永久关掉。
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct AgentsConfig {
+    #[serde(default)]
+    pub install_enabled: bool,
+    #[serde(default = "default_session_stale")]
+    pub session_stale_secs: u64,
+    #[serde(default = "default_working_stale")]
+    pub working_stale_secs: u64,
+}
+
+fn default_session_stale() -> u64 {
+    600
+}
+
+fn default_working_stale() -> u64 {
+    300
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            install_enabled: false,
+            session_stale_secs: default_session_stale(),
+            working_stale_secs: default_working_stale(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     #[serde(default = "default_listen")]
@@ -50,6 +83,8 @@ pub struct Config {
     /// TOML 里是 `[[launcher]]`(单数),读出来是一组。
     #[serde(default, rename = "launcher")]
     pub launchers: Vec<LauncherSpec>,
+    #[serde(default)]
+    pub agents: AgentsConfig,
 }
 
 impl Default for Config {
@@ -59,6 +94,7 @@ impl Default for Config {
             token: None,
             window_size: WindowSize::default(),
             launchers: Vec::new(),
+            agents: AgentsConfig::default(),
         }
     }
 }

@@ -19,6 +19,13 @@ pub struct InstallCtx {
     pub home: PathBuf,
     /// 当前监听端口。只影响**新写入**的 URL;删除时不看端口(见 `is_ours_any_port`)。
     pub port: u16,
+    /// 装不装**决策类**(阻塞式)hook。
+    ///
+    /// 实测:同一事件上多个阻塞 hook 会全部触发,**最后注册的赢**。我们把自己的组
+    /// append 在数组末尾,所以装上就会**覆盖别家的决策**(本机同时装了 clawd-on-desk
+    /// 时就会发生)。不偷偷占先:发现别家的阻塞式 hook 时默认置 false,只装遥测类,
+    /// 由用户看过冲突说明后显式打开。
+    pub include_blocking: bool,
 }
 
 pub struct ConfigEdit {
@@ -82,12 +89,17 @@ fn remove_ours(doc: &mut Value, event: &str) {
         groups.remove(i);
     }
 
-    // 空数组 / 空对象是残渣,不留:卸载后文件要看不出我们来过
+    // 空数组 / 空对象是残渣,不留:卸载后文件要看不出我们来过。
+    //
+    // **必须用 `shift_remove` 而不是 `remove`**:开了 `preserve_order` 之后
+    // `Map` 底下是 `IndexMap`,而 `remove` 是 **swap_remove** 语义 —— 它把最后一个
+    // 键换到被删的位置,顺序当场就乱了。这正是我们开 `preserve_order` 想避免的事,
+    // 用错方法等于白开。由 `second_install_is_byte_identical_and_skips_write` 抓出。
     if groups.is_empty() {
-        hooks.remove(event);
+        hooks.shift_remove(event);
     }
     if hooks.is_empty() {
-        root.remove("hooks");
+        root.shift_remove("hooks");
     }
 }
 

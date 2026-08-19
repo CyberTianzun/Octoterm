@@ -35,6 +35,7 @@ pub async fn start_test_server_at(
         token: token.into(),
         launchers: std::sync::Arc::new(octoterm_server::launcher::providers(&specs)),
         listen_port: addr.port(),
+        agents: Default::default(),
     };
     tokio::spawn(async move { serve(listener, state).await.unwrap() });
     addr

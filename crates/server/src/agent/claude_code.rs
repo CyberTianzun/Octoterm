@@ -69,6 +69,11 @@ fn managed_events() -> impl Iterator<Item = (&'static str, bool)> {
     TELEMETRY.iter().map(|e| (*e, false)).chain(BLOCKING.iter().map(|e| (*e, true)))
 }
 
+/// 装的时候按开关过滤;**卸载永远覆盖全部事件** —— 否则关掉开关再卸载会留下残留。
+fn events_to_install(ctx: &InstallCtx) -> impl Iterator<Item = (&'static str, bool)> + '_ {
+    managed_events().filter(move |(_, blocking)| ctx.include_blocking || !blocking)
+}
+
 fn read_settings(path: &std::path::Path) -> Option<Value> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()
@@ -134,7 +139,7 @@ impl AgentAdapter for ClaudeCode {
 
     fn plan_install(&self, ctx: &InstallCtx) -> Result<Vec<ConfigEdit>> {
         let path = settings_path(&ctx.home);
-        Ok(managed_events()
+        Ok(events_to_install(ctx)
             .map(|(event, blocking)| ConfigEdit {
                 path: path.clone(),
                 op: EditOp::EnsureHook {

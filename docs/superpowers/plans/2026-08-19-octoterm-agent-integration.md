@@ -414,7 +414,7 @@ Task 2 已经写好并测过的编辑计划、所有权判定、幂等与还原,
   - `GET  /api/agents/{id}/plan` —— 预演,返回将要产生的编辑与 diff 摘要
   - `POST /api/agents/{id}/install`、`POST /api/agents/{id}/uninstall`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 `crates/server/tests/agent_install.rs`,用 `tempfile` 造假 home:
 
@@ -429,7 +429,7 @@ Task 2 已经写好并测过的编辑计划、所有权判定、幂等与还原,
 #[test] fn missing_target_file_is_created() {}        // 用户还没有 settings.json 的情形
 ```
 
-- [ ] **Step 2: 配置节**
+- [x] **Step 2: 配置节**
 
 ```toml
 [agents]
@@ -441,7 +441,7 @@ working_stale_secs = 300
 `Config` 加 `#[serde(default)] pub agents: AgentsConfig`,全部字段带默认值 —— 老配置
 文件不写这一节也要能读。
 
-- [ ] **Step 3: 落盘**
+- [x] **Step 3: 落盘**
 
 顺序不能变:
 
@@ -460,12 +460,12 @@ working_stale_secs = 300
    窗口必须只出现在用户显式动作那一刻。端口变了导致的失效交给 `StalePort` 自检
    (Task 1 已实现)去报,由用户点「修复」,而不是我们背着他反复改文件。
 
-- [ ] **Step 4: 三条路由**
+- [x] **Step 4: 三条路由**
 
 `plan` 是只读的,返回将要做的编辑;`install` / `uninstall` 是变更。变更类要过门控,
 且必须返回**做了什么**(改了哪个文件、备份在哪),不能只回一个 200。
 
-- [ ] **Step 5: 与别家阻塞式 hook 共存**
+- [x] **Step 5: 与别家阻塞式 hook 共存**
 
 实测:同一事件上多个阻塞 hook **全部触发,最后注册的赢**(deny 在前 allow 在后 → 放行;
 调换顺序 → 拒绝)。我们的计划把自己的组 append 到数组末尾,**因此会覆盖别家的决策** ——
@@ -477,7 +477,7 @@ working_stale_secs = 300
 - **检测到别家阻塞式 hook 时,默认只装遥测类**,决策类要用户显式确认,并说清后果;
 - 遥测类无论如何都安全,不参与决策。
 
-- [ ] **Step 6: 改注释与协议文档**
+- [x] **Step 6: 改注释与协议文档**
 
 `launcher/mod.rs` 顶部「octoterm 从不写别人的配置文件」改成限定作用域的措辞:**发现只读,
 集成需用户显式动作**,并指向 spec。`config.rs` 的「server 自己永不写文件」同理。
@@ -485,7 +485,7 @@ working_stale_secs = 300
 `docs/protocol.md` 的 T10 修订:`/api/` 下**只读子集**保持 GET/无状态/幂等,新增
 `/api/agents/*` 变更子集,说明它为什么不属于会话/通道语义。分配新规则 ID(不复用、不重编号)。
 
-- [ ] **Step 7: 验证**
+- [x] **Step 7: 验证**
 
 测试全绿。手工三连:
 
@@ -494,6 +494,67 @@ working_stale_secs = 300
 3. 卸载 —— 与初始文件**逐字节相同**(还原)。
 
 第 2、3 条用真实的 `~/.claude/settings.json` 副本跑,不是合成数据。
+
+
+---
+
+## 实施记录:Task 3(2026-08-19,已完成)
+
+`agent_install` 9 个用例 + 端到端验证全过,`cargo test --workspace` 222 通过 0 失败,
+`cargo clippy --workspace -- -D warnings` 干净。
+
+**端到端用的正是「测试目录」这条路子**:把 server 的 `HOME` 指向测试目录,安装器产出的
+`<home>/.claude/settings.json` 落点恰好就是**项目级配置**的位置 —— 用户级和项目级共用
+同一套 `hooks` schema,所以真实 Claude 读到的就是我们真正生成的那份文件。全程
+`~/.claude/settings.json` 的 mtime 停在 8 月 17 日没动过。
+
+端到端结果(真实 Claude,haiku):
+
+```
+/hook/claude-code/user-prompt-submit  auth='Bearer secret-abc123'  session='42'
+/hook/claude-code/pre-tool-use        auth='Bearer secret-abc123'  session='42'
+/hook/claude-code/post-tool-use       auth='Bearer secret-abc123'  session='42'
+/hook/claude-code/stop                auth='Bearer secret-abc123'  session='42'
+```
+
+- **解决了 Task 2 留的待验证项**:`async: true` 与 header 的 `$VAR` 插值**共存正常**,
+  遥测类不必退回同步形态。
+- 鉴权头与会话头都正确插值,事件名 → 路径 slug 的转写也对得上。
+- `-p` 模式下没看到 `SessionStart` / `SessionEnd` / `Notification`。不阻塞,但 Task 5 接
+  摄入面时要留意:**不能假设 `SessionStart` 一定先到**,会话表要能被任意事件惰性创建。
+
+**真实字节校验**(种子是那份别家装满 hook 的脱敏 fixture):
+
+| 检查 | 结果 |
+| --- | --- |
+| 冲突时自动降级 | `include_blocking=false`,只装 7 个遥测事件,`PermissionRequest` 被排除 ✓ |
+| 装第一次 | `changed=true`,文件确实变化 ✓ |
+| 装第二次 | `changed=false`,逐字节相同 ✓ |
+| 卸载 | 逐字节还原 ✓ |
+| 备份落点 | `<config>/octoterm/agent-backups/`,**不在 `.claude` 里** ✓ |
+| 开关关闭 | `install` 返回 403,文件 mtime 未变 ✓ |
+
+**一个测出来的边界**:上面的「逐字节还原」成立的前提是原文格式与我们的 render 一致
+(2 空格缩进 + 末尾换行,也就是 Claude Code 自己写出来的形状)。实测把文件改成 4 空格
+缩进后再装再卸,结果是**语义还原、格式被规整成 2 空格**。这就是 spec 里列的副作用⑥,
+现在是实测值而不是推断。可接受,但 UI 上装之前应当提一句。
+
+**与计划的偏差**:
+
+1. **`InstallCtx` 多了 `include_blocking`**。Step 5 的冲突策略需要它,而放进 ctx 比改 trait
+   签名干净。卸载**永远**覆盖全部事件 —— 否则关掉开关再卸载会留下残留。
+2. **`Supervisor::new` 多了一个参数**(`AgentsConfig`),desktop 的 10 处测试构造点同步更新。
+3. `describe()` 把 `EditOp` 投影成 `{path, action, event, spec}` 再返回,不直接序列化内部
+   枚举 —— 客户端不该依赖服务端的内部结构(R13)。
+
+**抓到并修掉的真 bug**:`serde_json::Map::remove` 在 `preserve_order` 下是 **swap_remove**
+语义,会把最后一个键换到被删的位置,顺序当场就乱。第二次安装因此产生了不同的字节。
+必须用 `shift_remove`。
+
+值得记的是**为什么之前没抓到**:JSON 层的 `install_is_idempotent` 是绿的 —— `IndexMap`
+的相等比较**与顺序无关**,`Value == Value` 看不出键序变化。只有字节级的
+`second_install_is_byte_identical_and_skips_write` 能抓。凡是承诺「保持用户文件原样」的
+地方,断言必须落在字节上,不能落在语义上。
 
 ### Task 4: 协议扩展 —— `AgentEvent`
 

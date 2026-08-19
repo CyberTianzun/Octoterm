@@ -27,7 +27,7 @@ async fn wait_until_refused(addr: std::net::SocketAddr) -> bool {
 
 #[tokio::test]
 async fn rebinding_to_a_new_port_keeps_sessions_alive() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let old = sup.restart("127.0.0.1:0".parse().unwrap(), "t1".into()).await.unwrap();
 
     sup.manager().create(None, long_lived_cmd(), None).unwrap();
@@ -46,7 +46,7 @@ async fn rebinding_to_a_new_port_keeps_sessions_alive() {
 
 #[tokio::test]
 async fn changing_only_the_token_reuses_the_same_address() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "old".into()).await.unwrap();
 
     // 同地址重启:先关后 bind + 重试,必须仍然成功且地址不变
@@ -58,7 +58,7 @@ async fn changing_only_the_token_reuses_the_same_address() {
 
 #[tokio::test]
 async fn a_failed_bind_leaves_the_old_listener_running() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
 
     // 占住另一个端口,再让 supervisor 去抢它
@@ -79,7 +79,7 @@ async fn a_failed_bind_leaves_the_old_listener_running() {
 /// 一次失败的保存弄没了。所以这里既断言返回 Err,也断言旧的 listener 仍在跑。
 #[tokio::test]
 async fn an_empty_token_is_refused_without_touching_the_running_listener() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
 
     // 同地址 + 空 token:最危险的那一组(先 stop 再 bind)
@@ -97,7 +97,7 @@ async fn an_empty_token_is_refused_without_touching_the_running_listener() {
 /// 从来没起来过的时候也一样拒绝,而不是「反正没有东西可丢,就让它跑起来」。
 #[tokio::test]
 async fn an_empty_token_is_refused_even_when_nothing_is_running() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let err = sup.restart("127.0.0.1:0".parse().unwrap(), String::new()).await.unwrap_err();
 
     assert!(format!("{err:#}").contains("空 token"), "{err:#}");
@@ -106,7 +106,7 @@ async fn an_empty_token_is_refused_even_when_nothing_is_running() {
 
 #[tokio::test]
 async fn stop_releases_the_port_but_not_the_sessions() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "t".into()).await.unwrap();
     sup.manager().create(None, long_lived_cmd(), None).unwrap();
 
@@ -168,7 +168,7 @@ async fn connect_authed(addr: std::net::SocketAddr, token: &str) -> Ws {
 
 #[tokio::test]
 async fn restarting_the_same_address_while_a_websocket_is_still_connected() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let addr = sup.restart("127.0.0.1:0".parse().unwrap(), "old".into()).await.unwrap();
 
     // 握手完成的活连接,整条测试期间**不断开**(underscore 绑定只是压警告,
@@ -194,7 +194,7 @@ async fn restarting_the_same_address_while_a_websocket_is_still_connected() {
 /// 所以这里必须绕出去,从**新地址**用新 token 握手,拿服务端返回的会话列表说话。
 #[tokio::test]
 async fn a_session_created_before_a_rebind_is_visible_from_the_new_address() {
-    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[]);
+    let mut sup = Supervisor::new(1 << 20, WindowSize::default(), &[], Default::default());
     let old = sup.restart("127.0.0.1:0".parse().unwrap(), "t1".into()).await.unwrap();
 
     let session = sup.manager().create(Some("survivor".into()), long_lived_cmd(), None).unwrap();

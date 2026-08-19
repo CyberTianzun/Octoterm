@@ -5,7 +5,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{any, get};
+use axum::routing::{any, get, post};
 use axum::{Json, Router};
 use futures_util::SinkExt;
 use octoterm_protocol::{ClientMsg, Frame, ServerMsg, CONTROL_CHANNEL, PROTO_VERSION};
@@ -23,6 +23,8 @@ pub struct AppState {
     /// 实际监听的端口。装 hook 时要把它写进 URL,判定「装了却端口对不上」也要它。
     /// 取的是 listener 的 `local_addr()` 而不是配置值 —— 配 `:0` 时两者不同。
     pub listen_port: u16,
+    /// `[agents]` 配置。装 hook 的门控就在这里,默认关。
+    pub agents: crate::config::AgentsConfig,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -30,6 +32,9 @@ pub fn router(state: AppState) -> Router {
         .route("/ws", any(ws_handler))
         .route("/api/launchers", get(launchers_handler))
         .route("/api/agents", get(crate::agent::routes::list))
+        .route("/api/agents/{id}/plan", get(crate::agent::routes::plan))
+        .route("/api/agents/{id}/install", post(crate::agent::routes::install))
+        .route("/api/agents/{id}/uninstall", post(crate::agent::routes::uninstall))
         .fallback(crate::assets::static_handler)
         .with_state(state)
 }

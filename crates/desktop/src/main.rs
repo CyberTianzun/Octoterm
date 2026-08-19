@@ -83,7 +83,7 @@ fn main() -> Result<()> {
             .context("无法创建 tokio runtime"),
     )?;
 
-    let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers);
+    let mut sup = Supervisor::new(1 << 20, config.window_size, &config.launchers, config.agents);
     // 监听失败同样不是退出的理由:端口被占用时用户要能打开设置窗口换一个端口。
     let listen_error = match rt.block_on(sup.restart(config.listen, token)) {
         Ok(addr) => {
