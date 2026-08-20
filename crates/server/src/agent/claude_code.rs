@@ -195,10 +195,14 @@ impl AgentAdapter for ClaudeCode {
     fn render(&self, decision: &Decision) -> Value {
         let d = match decision {
             Decision::NoDecision => return json!({}),
-            Decision::Allow { message } => {
+            Decision::Allow { message, updated_input } => {
                 let mut o = json!({ "behavior": "allow" });
                 if let Some(m) = message {
                     o["message"] = json!(m);
+                }
+                // 选择题的答案就藏在这里:放行的同时把改写后的入参交回去
+                if let Some(u) = updated_input {
+                    o["updatedInput"] = u.clone();
                 }
                 o
             }

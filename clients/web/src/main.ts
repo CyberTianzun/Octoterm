@@ -20,8 +20,11 @@ import {
   type AgentSession,
   type PendingDetail,
   answerPending,
+  type ChoiceQuestion,
+  buildChoiceAnswer,
   describeToolInput,
   fetchPending,
+  parseChoice,
   secondsLeft,
   applyEvent,
   fetchAgentSessions,
@@ -500,6 +503,14 @@ function renderAgentBanner() {
     }
     row.appendChild(head);
 
+    // 选择题走另一套:它要的不是「准不准」,而是「选哪个」
+    const choice = detail ? parseChoice(detail.tool_name, detail.tool_input) : null;
+    if (choice) {
+      row.appendChild(renderChoice(choice, a, detail!));
+      box.appendChild(row);
+      continue;
+    }
+
     // 第二行:提醒 + 命令原文。**这两行是这个横幅存在的理由**
     if (detail) {
       const hint = document.createElement("div");
@@ -572,6 +583,105 @@ function renderAgentBanner() {
     paint();
     countdownTimer = setInterval(paint, 1000);
   }
+}
+
+/**
+ * 选择题的界面。
+ *
+ * 和授权那套的区别是它没有「准/不准」—— 只有「选哪个」。所以按钮是选项本身,
+ * 全部问题都选完才允许提交(半份答案回传过去,agent 拿到的是一份残缺的入参)。
+ *
+ * 问题原文**不做 JS 截断**:回传的 `answers` 以问题原文为键,一旦拿截断后的文本
+ * 当键,答案会对不上任何一个问题而被静默丢掉。要省略号让 CSS 去画。
+ */
+function renderChoice(
+  questions: ChoiceQuestion[],
+  a: AgentSession,
+  detail: PendingDetail,
+): HTMLElement {
+  const wrap = document.createElement("div");
+  wrap.className = "achoice";
+  // 横幅的大标题是通用的「有 AI 在等你回答」;这里要说清楚这一条**不是授权**,
+  // 是在问你 —— 两者的按钮语义完全不同,混起来会让人以为点了就等于放行。
+  const kind = document.createElement("div");
+  kind.className = "achoice-kind";
+  kind.textContent = t("agent.choiceTitle");
+  wrap.appendChild(kind);
+  const picked: Record<string, string> = {};
+
+  const submit = document.createElement("button");
+  submit.className = "abanner-allow";
+  submit.textContent = t("agent.choiceSubmit");
+  submit.disabled = true;
+  const status = document.createElement("span");
+  status.className = "abanner-status";
+  status.textContent = t("agent.choicePending");
+
+  const syncSubmit = () => {
+    const done = questions.every((q) => picked[q.question]);
+    submit.disabled = !done;
+    status.textContent = done ? "" : t("agent.choicePending");
+  };
+
+  for (const q of questions) {
+    const block = document.createElement("div");
+    block.className = "achoice-q";
+    const label = document.createElement("div");
+    label.className = "achoice-question";
+    label.textContent = q.header ? `${q.header} — ${q.question}` : q.question;
+    label.title = q.question;
+    block.appendChild(label);
+
+    const opts = document.createElement("div");
+    opts.className = "achoice-opts";
+    for (const o of q.options) {
+      const b = document.createElement("button");
+      b.className = "achoice-opt";
+      b.textContent = o.label;
+      if (o.description) b.title = o.description;
+      b.addEventListener("click", () => {
+        picked[q.question] = o.label;
+        opts.querySelectorAll(".achoice-opt").forEach((x) => x.classList.remove("is-picked"));
+        b.classList.add("is-picked");
+        syncSubmit();
+      });
+      opts.appendChild(b);
+    }
+    block.appendChild(opts);
+    wrap.appendChild(block);
+  }
+
+  submit.addEventListener("click", async () => {
+    submit.disabled = true;
+    const outcome = await answerPending(
+      token(),
+      a.pending!,
+      "allow",
+      undefined,
+      buildChoiceAnswer(detail.tool_input, picked),
+    );
+    if (outcome !== "ok") {
+      status.textContent =
+        outcome === "gone" ? t("agent.gone")
+        : outcome === "already" ? t("agent.already")
+        : t("agent.failed");
+    }
+    pendingDetails.delete(a.pending!);
+    a.pending = null;
+    renderAgentBanner();
+    renderSidebar();
+  });
+
+  const acts = document.createElement("div");
+  acts.className = "abanner-acts";
+  const go = document.createElement("button");
+  go.textContent = t("agent.openSession");
+  go.addEventListener("click", () => {
+    if (a.session != null) openTerminal(a.session);
+  });
+  acts.append(submit, go, status);
+  wrap.appendChild(acts);
+  return wrap;
 }
 
 /**

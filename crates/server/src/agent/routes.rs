@@ -367,6 +367,9 @@ pub struct AnswerBody {
     pub decision: String,
     #[serde(default)]
     pub message: Option<String>,
+    /// 改写后的工具入参。回答选择题时用它把答案带回去(见 `store::Decision`)。
+    #[serde(default)]
+    pub updated_input: Option<serde_json::Value>,
 }
 
 /// `GET /api/agents/pending` —— 当前有哪些请求在等人。
@@ -390,7 +393,7 @@ pub async fn answer(
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
     let decision = match body.decision.as_str() {
-        "allow" => Decision::Allow { message: body.message },
+        "allow" => Decision::Allow { message: body.message, updated_input: body.updated_input },
         "deny" => Decision::Deny { message: body.message },
         other => {
             return (StatusCode::BAD_REQUEST, format!("unknown decision: {other}")).into_response()

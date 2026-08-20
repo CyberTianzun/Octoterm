@@ -166,12 +166,19 @@ export async function answerPending(
   pendingId: string,
   decision: "allow" | "deny",
   message?: string,
+  /** 回答选择题时带上:原入参 + 以问题原文为键的 answers(见 `buildChoiceAnswer`)。 */
+  updatedInput?: unknown,
 ): Promise<AnswerOutcome> {
   try {
     const r = await fetch("/api/agents/answer", {
       method: "POST",
       headers: { ...authHeaders(token), "Content-Type": "application/json" },
-      body: JSON.stringify({ pending_id: pendingId, decision, message }),
+      body: JSON.stringify({
+        pending_id: pendingId,
+        decision,
+        message,
+        updated_input: updatedInput,
+      }),
     });
     if (r.ok) return "ok";
     if (r.status === 404) return "gone";
@@ -346,4 +353,78 @@ export function describeToolInput(input: unknown): string {
 /** 还剩多少秒。已过期返回 0。 */
 export function secondsLeft(expiresAt: number, nowSecs: number): number {
   return Math.max(0, expiresAt - nowSecs);
+}
+
+/* ---------- 选择题 ---------- */
+
+export interface ChoiceOption {
+  label: string;
+  description?: string;
+}
+
+export interface ChoiceQuestion {
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: ChoiceOption[];
+}
+
+/** 上界。超了就不渲染,回落到「去终端回答」—— 终端里那套 UI 本来就处理得了。 */
+const MAX_QUESTIONS = 5;
+const MAX_OPTIONS = 8;
+
+/**
+ * 认出一道选择题。
+ *
+ * `AskUserQuestion` 走的也是 `PermissionRequest` 通道,只是它要的不是 allow/deny,
+ * 而是「选哪个」。形状不对或超限一律返回 `null`,由调用方回落到普通授权 UI 或
+ * 「去这个会话」—— **绝不半渲染**:选项少显示一个,用户就会在看不见的选项上做决定。
+ */
+export function parseChoice(toolName: string | null, toolInput: unknown): ChoiceQuestion[] | null {
+  if (toolName !== "AskUserQuestion") return null;
+  const input = toolInput as { questions?: unknown } | null;
+  const raw = input && Array.isArray(input.questions) ? input.questions : null;
+  if (!raw || raw.length === 0 || raw.length > MAX_QUESTIONS) return null;
+
+  const out: ChoiceQuestion[] = [];
+  for (const q of raw as Record<string, unknown>[]) {
+    const question = typeof q?.question === "string" ? q.question : null;
+    const options = Array.isArray(q?.options) ? (q.options as Record<string, unknown>[]) : null;
+    if (!question || !options || options.length === 0 || options.length > MAX_OPTIONS) return null;
+    const parsed: ChoiceOption[] = [];
+    for (const o of options) {
+      if (typeof o?.label !== "string" || !o.label) return null;
+      parsed.push({
+        label: o.label,
+        description: typeof o.description === "string" ? o.description : undefined,
+      });
+    }
+    out.push({
+      question,
+      header: typeof q.header === "string" ? q.header : undefined,
+      multiSelect: q.multiSelect === true,
+      options: parsed,
+    });
+  }
+  // 同一句问题出现两次的话,以问题原文为键的 answers 会互相覆盖 —— 宁可不渲染
+  if (new Set(out.map((q) => q.question)).size !== out.length) return null;
+  return out;
+}
+
+/**
+ * 构造回传的 `updatedInput`:原入参 + `answers`,**以问题原文为键**。
+ *
+ * 键必须是原文这件事有个坑:界面上问题可能很长,想截断显示是很自然的念头 ——
+ * 但一旦拿截断后的文本当键,答案就对不上任何一个问题,会被 agent 静默丢掉。
+ * 所以这里只接受原文,显示层的省略号交给 CSS 去做。
+ */
+export function buildChoiceAnswer(
+  toolInput: unknown,
+  answers: Record<string, string>,
+): Record<string, unknown> {
+  const input = (toolInput && typeof toolInput === "object" ? toolInput : {}) as Record<
+    string,
+    unknown
+  >;
+  return { ...input, answers };
 }

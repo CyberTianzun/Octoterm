@@ -12,6 +12,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
   summarizePlan, fetchAgentPlan, describeToolInput, secondsLeft, stateText, fetchPending,
+  parseChoice, buildChoiceAnswer,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -155,4 +156,46 @@ test("notification_type 这种机器串要翻译,工具名原样显示", () => {
 test("挂起详情拉不到时降级为空数组(协议 T12)", async () => {
   globalThis.fetch = async () => ({ ok: false, status: 404 });
   assert.deepEqual(await fetchPending("tok"), []);
+});
+
+const ask = (questions) => ({ questions });
+
+test("只有 AskUserQuestion 才当选择题", () => {
+  const input = ask([{ question: "选哪个?", options: [{ label: "A" }] }]);
+  assert.equal(parseChoice("Bash", input), null);
+  assert.equal(parseChoice("AskUserQuestion", input).length, 1);
+});
+
+test("形状不对或超限一律不渲染 —— 绝不半渲染", () => {
+  const bad = [
+    ask([]),
+    ask([{ question: "q", options: [] }]),
+    ask([{ question: "q" }]),
+    ask([{ options: [{ label: "A" }] }]),
+    ask([{ question: "q", options: [{ nolabel: 1 }] }]),
+    ask(Array.from({ length: 6 }, (_, i) => ({ question: `q${i}`, options: [{ label: "A" }] }))),
+    ask([{ question: "q", options: Array.from({ length: 9 }, (_, i) => ({ label: `o${i}` })) }]),
+  ];
+  for (const input of bad) {
+    assert.equal(parseChoice("AskUserQuestion", input), null, `不该渲染: ${JSON.stringify(input)}`);
+  }
+});
+
+/// 两道问题文本相同的话,以问题原文为键的 answers 会互相覆盖。
+test("重复的问题文本不渲染", () => {
+  const dup = ask([
+    { question: "同一句", options: [{ label: "A" }] },
+    { question: "同一句", options: [{ label: "B" }] },
+  ]);
+  assert.equal(parseChoice("AskUserQuestion", dup), null);
+});
+
+/// 键必须是问题原文。界面上截断显示是很自然的念头,但拿截断文本当键,
+/// 答案会对不上任何一个问题、被 agent 静默丢掉。
+test("答案以问题原文为键,并保留原入参的其它字段", () => {
+  const input = { questions: [{ question: "很长很长的一句问题原文", options: [] }], extra: 1 };
+  const out = buildChoiceAnswer(input, { "很长很长的一句问题原文": "SQLite" });
+  assert.equal(out.answers["很长很长的一句问题原文"], "SQLite");
+  assert.equal(out.extra, 1, "原入参的其它字段要原样带回去");
+  assert.ok(Array.isArray(out.questions));
 });

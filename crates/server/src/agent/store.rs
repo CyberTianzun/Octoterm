@@ -89,8 +89,18 @@ impl AgentSession {
 /// 用户 allow 或 deny**。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Decision {
-    Allow { message: Option<String> },
-    Deny { message: Option<String> },
+    Allow {
+        message: Option<String>,
+        /// 改写后的工具入参,原样回传给 agent。
+        ///
+        /// 这是**回答选择题**的机制:`AskUserQuestion` 这类工具走的也是
+        /// `PermissionRequest` 通道,答案不是 allow/deny,而是「放行,并且把用户选的
+        /// 答案填进入参里」。参见 `claude_code::render`。
+        updated_input: Option<serde_json::Value>,
+    },
+    Deny {
+        message: Option<String>,
+    },
     NoDecision,
 }
 

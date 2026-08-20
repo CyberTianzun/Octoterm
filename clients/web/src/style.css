@@ -530,3 +530,29 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 @media (prefers-reduced-motion: reduce) {
   .apill.a-waiting { animation: none; }
 }
+
+/* ---------- 选择题 ---------- */
+
+.achoice { margin-top: 4px; }
+.achoice-q { margin-bottom: 8px; }
+/* 问题原文只用 CSS 省略,绝不在 JS 里截断 —— 回传的键就是这段文本 */
+.achoice-question {
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.achoice-opts { display: flex; gap: 6px; flex-wrap: wrap; }
+.achoice-opt {
+  padding: 3px 12px;
+  cursor: pointer;
+  border-radius: 999px;
+}
+.achoice-opt.is-picked {
+  background: #ffe9b0;
+  color: #241a00;
+  border-color: #ffe9b0;
+  font-weight: 700;
+}
+
+.achoice-kind { font-size: 12px; opacity: 0.85; margin: 4px 0 6px; }

@@ -193,3 +193,61 @@ async fn agent_disconnect_clears_the_pending_entry() {
     }
     panic!("agent 断连后挂起项没有被摘掉 —— Drop guard 没生效");
 }
+
+/// 回答**选择题**。
+///
+/// `AskUserQuestion` 这类工具走的也是 `PermissionRequest` 通道,但答案不是
+/// allow/deny —— 是「放行,并且把用户选的答案填进入参里」。契约:`updatedInput` 是
+/// 原入参加一个 `answers`,**以问题原文为键**。
+#[tokio::test]
+async fn choice_answer_travels_as_updated_input() {
+    let addr = server(30).await;
+    let hook = tokio::spawn(async move {
+        reqwest::Client::new()
+            .post(format!("http://{addr}/hook/claude-code/permission-request"))
+            .header("Authorization", format!("Bearer {}", hook_token()))
+            .header("X-Octoterm-Session", "1")
+            .header("Content-Type", "application/json")
+            .body(
+                r#"{"session_id":"s1","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"用哪个数据库?","options":[{"label":"Postgres"},{"label":"SQLite"}]}]}}"#,
+            )
+            .send()
+            .await
+            .unwrap()
+    });
+    let id = wait_for_pending(addr).await;
+
+    let status = reqwest::Client::new()
+        .post(format!("http://{addr}/api/agents/answer"))
+        .header("Authorization", "Bearer tok")
+        .header("Content-Type", "application/json")
+        .body(format!(
+            r#"{{"pending_id":"{id}","decision":"allow","updated_input":{{"questions":[{{"question":"用哪个数据库?"}}],"answers":{{"用哪个数据库?":"SQLite"}}}}}}"#
+        ))
+        .send()
+        .await
+        .unwrap()
+        .status();
+    assert_eq!(status, 200);
+
+    let body: serde_json::Value =
+        serde_json::from_str(&hook.await.unwrap().text().await.unwrap()).unwrap();
+    let d = &body["hookSpecificOutput"]["decision"];
+    assert_eq!(d["behavior"], "allow");
+    assert_eq!(
+        d["updatedInput"]["answers"]["用哪个数据库?"], "SQLite",
+        "答案必须以**问题原文**为键回传"
+    );
+}
+
+/// 普通授权不带 updatedInput —— 多塞一个空字段会让 agent 以为入参被改写过。
+#[tokio::test]
+async fn plain_allow_carries_no_updated_input() {
+    let addr = server(30).await;
+    let hook = tokio::spawn(async move { permission_request(addr).send().await.unwrap() });
+    let id = wait_for_pending(addr).await;
+    answer(addr, &id, "allow").await;
+    let body: serde_json::Value =
+        serde_json::from_str(&hook.await.unwrap().text().await.unwrap()).unwrap();
+    assert!(body["hookSpecificOutput"]["decision"].get("updatedInput").is_none());
+}
