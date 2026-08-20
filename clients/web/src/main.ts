@@ -322,7 +322,13 @@ window.visualViewport?.addEventListener("resize", refit);
 $("menu").addEventListener("click", () => setDrawer(true));
 // 回列表 = detach 并回到主视图。会话本身不受影响(协议 CH6:detach 从不结束会话),
 // 再点进来是一次 resync —— 用一次重绘换「随时能纵览全局」,值。
-$("back-to-list").addEventListener("click", () => closeTerminal());
+//
+// 顺手关掉抽屉:窄屏上侧边栏是盖在工作区上的浮层,不关掉的话点完这个按钮,
+// 身后那张列表页恰好被挡住,看起来像什么都没发生。
+$("back-to-list").addEventListener("click", () => {
+  setDrawer(false);
+  closeTerminal();
+});
 $("scrim").addEventListener("click", () => setDrawer(false));
 $("open-settings").addEventListener("click", () => settings.open());
 
