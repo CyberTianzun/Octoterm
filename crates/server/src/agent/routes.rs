@@ -174,12 +174,46 @@ pub async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Resp
     Json(serde_json::json!({ "sessions": state.agent_sessions.list() })).into_response()
 }
 
+/// 认不出的调用一律 **200 + 空体**,而不是 4xx。
+///
+/// 这是实测教训。原先返回 401/400/404,结果 Claude Code 每轮都往用户脸上打一行
+/// `Stop hook error: HTTP 401 from http://127.0.0.1:7683/hook/claude-code/stop` ——
+/// 因为 agent 把 hook 的非 2xx 当成错误显示。
+///
+/// 而「不是托管会话打来的」是**完全正常**的事,不是错误:hook 装在用户级全局配置里,
+/// 这台机器上每一个 Claude 会话都会触发它,其中绝大多数不是从 octoterm 里起的。
+/// 把设计上必然发生的事报成错误,等于让用户天天看红字。
+///
+/// `200` + 空体对 agent 的语义恰好是「收到了,没有决定」,它照常走自己的流程。诊断
+/// 信息也没丢:服务端按节流打日志,`GET /api/agents` 的自检也照样能报出装了却连不上。
+fn ignored() -> Response {
+    (StatusCode::OK, Json(serde_json::json!({}))).into_response()
+}
+
+/// 节流日志。每个工具调用都会来一次,不节流就是自己刷自己的日志。
+fn log_ignored(reason: &str) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static LAST: AtomicU64 = AtomicU64::new(0);
+    const EVERY_SECS: u64 = 60;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST.load(Ordering::Relaxed);
+    if now.saturating_sub(last) >= EVERY_SECS
+        && LAST.compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+    {
+        tracing::debug!(reason, "忽略了一个认不出的 hook 调用(60 秒内只记一条)");
+    }
+}
+
 /// `POST /hook/{agent}/{event}` —— agent 打进来的地方。
 ///
 /// 这是**第三方入口**,不属于客户端控制面,因此:
 /// - 用的是独立的 hook 密钥,不是客户端那个 bearer token;
 /// - 只认回环地址,主监听是不是 0.0.0.0 都一样;
-/// - 认不出的事件返回 200 而不是 4xx —— agent 升级会带来新事件,不能因此把它卡住。
+/// - **认不出的一律安静地收下**(见 `ignored`),包括没鉴权、没会话头、不认识的 agent、
+///   坏 JSON。安全性由「什么都不做」保证,而不是由回一个错误码保证。
 pub async fn hook(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -187,40 +221,44 @@ pub async fn hook(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Response {
-    // 1. 只认回环。hook payload 里有 tool_input(命令原文、文件路径),不对外开。
+    // 只认回环。hook payload 里有 tool_input(命令原文、文件路径),不对外开。
+    // 这一条保留 403:非回环的东西不是 agent,不需要对它安静。
     if !peer.ip().is_loopback() {
         tracing::warn!(%peer, "非回环地址访问 hook 面,拒绝");
         return StatusCode::FORBIDDEN.into_response();
     }
-    // 2. hook 密钥。拿不到 = 不是我们托管的会话里跑的 agent(见 store::hook_token)。
+    // hook 密钥。拿不到 = 不是我们托管的会话里跑的 agent —— 正常情况,安静收下。
     let ok = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .is_some_and(|v| v == crate::agent::store::hook_token());
     if !ok {
-        return StatusCode::UNAUTHORIZED.into_response();
+        log_ignored("no-or-bad-token");
+        return ignored();
     }
-    // 3. 关联到哪个托管会话。**不校验会话是否还活着** —— 会话刚没、hook 还在路上是
-    //    正常的时序,交给清理去收(Task 7),不必在这里制造一个失败。
-    let session = headers
+    // 关联到哪个托管会话。**不校验会话是否还活着** —— 会话刚没、hook 还在路上是
+    // 正常的时序,交给清理去收(见 store::decide),不必在这里制造一个失败。
+    let Some(session) = headers
         .get("X-Octoterm-Session")
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.parse::<u64>().ok());
-    let Some(session) = session else {
-        return (StatusCode::BAD_REQUEST, "missing or bad X-Octoterm-Session").into_response();
+        .and_then(|v| v.parse::<u64>().ok())
+    else {
+        log_ignored("no-session-header");
+        return ignored();
     };
 
     let Some(adapter) = crate::agent::find(&agent) else {
-        return (StatusCode::NOT_FOUND, "no such agent").into_response();
+        log_ignored("unknown-agent");
+        return ignored();
     };
 
     let payload: serde_json::Value = match serde_json::from_slice(&body) {
         Ok(v) => v,
         Err(_) if body.is_empty() => serde_json::json!({}),
-        Err(e) => {
-            tracing::debug!(error = %e, "hook payload 不是合法 JSON");
-            return (StatusCode::BAD_REQUEST, "bad json").into_response();
+        Err(_) => {
+            log_ignored("bad-json");
+            return ignored();
         }
     };
 
@@ -238,7 +276,7 @@ pub async fn hook(
     let Some(update) = adapter.parse(&event, &payload) else {
         // 认不出的事件:收下,忽略,回 200。不认识不是错误。
         tracing::debug!(agent = %agent, event = %event, "忽略未知 hook 事件");
-        return StatusCode::OK.into_response();
+        return ignored();
     };
 
     let snapshot =

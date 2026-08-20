@@ -44,40 +44,65 @@ async fn server() -> std::net::SocketAddr {
     common::start_test_server_at("tok", 1 << 16, Default::default(), vec![]).await
 }
 
+/// 认不出的调用必须**安静地收下**,不能回 4xx。
+///
+/// 这是线上打回来的教训:原先回 401,结果 Claude Code 每轮都往用户脸上打一行
+/// `Stop hook error: HTTP 401 from …/hook/claude-code/stop`,因为它把 hook 的非 2xx
+/// 当成错误显示。而「不是托管会话打来的」是**完全正常**的事 —— hook 装在用户级全局
+/// 配置里,这台机器上每个 Claude 会话都会触发它。
+///
+/// 安全性由「什么都不做」保证:下面每一条都同时断言**会话表没有被写进去**。
+async fn assert_quietly_ignored(addr: std::net::SocketAddr, r: reqwest::Response) {
+    assert_eq!(r.status(), 200, "认不出的调用不能回 4xx —— agent 会把它当错误打给用户");
+    let v = agent_sessions(addr, "tok").await;
+    assert!(v["sessions"].as_array().unwrap().is_empty(), "不该留下任何状态");
+}
+
 #[tokio::test]
-async fn missing_auth_is_rejected() {
+async fn no_token_is_ignored_not_an_error() {
     let addr = server().await;
     let r = post_hook(addr, "/hook/claude-code/stop", None, Some("1"), "{}").await;
-    assert_eq!(r.status(), 401);
+    assert_quietly_ignored(addr, r).await;
 }
 
 #[tokio::test]
-async fn wrong_token_is_rejected() {
+async fn wrong_token_is_ignored_not_an_error() {
     let addr = server().await;
     let r = post_hook(addr, "/hook/claude-code/stop", Some("nope"), Some("1"), "{}").await;
-    assert_eq!(r.status(), 401);
+    assert_quietly_ignored(addr, r).await;
 }
 
-/// 客户端那个 bearer token **不能**用来打 hook 面:两套凭据,两个信任域。
+/// 客户端那个 bearer token **打不动** hook 面:两套凭据,两个信任域。
+/// 安静地忽略,但绝不接受。
 #[tokio::test]
 async fn client_token_does_not_work_on_hook_plane() {
     let addr = server().await;
     let r = post_hook(addr, "/hook/claude-code/stop", Some("tok"), Some("1"), "{}").await;
-    assert_eq!(r.status(), 401);
+    assert_quietly_ignored(addr, r).await;
 }
 
+/// 没有会话头 = 不是从 octoterm 会话里起的 agent。这正是「非托管会话」那条路,
+/// 也正是线上天天在发生的那条路。
 #[tokio::test]
-async fn missing_session_header_is_rejected() {
+async fn missing_session_header_is_ignored_not_an_error() {
     let addr = server().await;
     let r = post_hook(addr, "/hook/claude-code/stop", Some(hook_token()), None, "{}").await;
-    assert_eq!(r.status(), 400);
+    assert_quietly_ignored(addr, r).await;
 }
 
 #[tokio::test]
-async fn unknown_agent_is_404() {
+async fn unknown_agent_is_ignored_not_an_error() {
     let addr = server().await;
-    let r = post_hook(addr, "/hook/no-such-agent/stop", Some(hook_token()), Some("1"), "{}").await;
-    assert_eq!(r.status(), 404);
+    let r =
+        post_hook(addr, "/hook/no-such-agent/stop", Some(hook_token()), Some("1"), "{}").await;
+    assert_quietly_ignored(addr, r).await;
+}
+
+#[tokio::test]
+async fn bad_json_is_ignored_not_an_error() {
+    let addr = server().await;
+    let r = post_hook(addr, "/hook/claude-code/stop", Some(hook_token()), Some("1"), "{ nope").await;
+    assert_quietly_ignored(addr, r).await;
 }
 
 /// agent 升级会带来新事件。收下、忽略、回 200 —— 绝不能因为多了一个事件名就把
