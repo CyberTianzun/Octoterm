@@ -18,7 +18,11 @@ import { mountNewSessionMenu } from "./new-session";
 import {
   type AgentMap,
   type AgentSession,
+  type PendingDetail,
   answerPending,
+  describeToolInput,
+  fetchPending,
+  secondsLeft,
   applyEvent,
   fetchAgentSessions,
   forSession,
@@ -39,6 +43,11 @@ let webgl: WebglAddon | null = null;
 const previews = new Map<number, Terminal>();
 /** key = `${agent_id} ${agent_session_id}`,见 agents.ts */
 const agents: AgentMap = new Map();
+/** 挂起请求的详情,key = pending id。广播里没有命令原文,详情单独拉(见 agents.ts)。 */
+const pendingDetails = new Map<string, PendingDetail>();
+/** 倒计时的刷新句柄。重绘时先清掉,免得叠出多个。 */
+let countdownTimer: ReturnType<typeof setInterval> | null = null;
+const BASE_TITLE = document.title;
 
 let config: OctoConfig = loadConfig(resolveTheme);
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
@@ -424,14 +433,35 @@ function renderSessionList() {
 }
 
 /**
+ * 标签页标题上的待办数。
+ *
+ * 这是最便宜的跨设备注意力机制:这功能的卖点就是「在手机上接管」,而手机浏览器
+ * 十有八九把它压在后台 —— 页面里做得再显眼也看不见,标题栏能。
+ */
+function updateTitleBadge() {
+  const n = waitingList(agents).length;
+  document.title = n > 0 ? `(${n}) ${BASE_TITLE}` : BASE_TITLE;
+}
+
+/**
  * 「有 AI 在等你」横幅。
  *
- * 只放结构化的允许/拒绝。**自由文本回答不在这里** —— octoterm 本来就托管着那个
- * pty,「去这个会话」一键 attach 过去,直接在终端里打字就是了。再造一个输入框
- * 只会多一条容易出错的路径,而且它没法处理 agent 自己画的那些 TUI 交互。
+ * 设计上只有一条铁律:**不让人盲签**。第一版只显示「会话名 · 等你回答」,等于让
+ * 用户一键批准一条看不见的命令 —— 那比没有这个功能更危险,它会训练人闭眼点允许。
+ * 所以命令原文必须在按钮**上方**、完整、不截断。
+ *
+ * 这里只放结构化的允许/拒绝。自由文本回答不在这儿 —— octoterm 托管着那个 pty,
+ * 「去这个会话」一键过去在终端里打字就是了,再造一个输入框既多余又处理不了
+ * agent 自己画的 TUI 交互。
  */
 function renderAgentBanner() {
   const box = $("agent-banner");
+  if (countdownTimer) {
+    clearInterval(countdownTimer);
+    countdownTimer = null;
+  }
+  updateTitleBadge();
+
   const waiting = waitingList(agents);
   if (waiting.length === 0) {
     box.hidden = true;
@@ -445,47 +475,118 @@ function renderAgentBanner() {
   title.textContent = t("agent.waitingTitle");
   box.appendChild(title);
 
+  const ticks: { el: HTMLElement; expiresAt: number }[] = [];
+
   for (const a of waiting) {
+    const detail = pendingDetails.get(a.pending!);
     const row = document.createElement("div");
     row.className = "abanner-row";
-    const what = document.createElement("span");
-    what.className = "abanner-what";
+
+    // 第一行:哪个会话、什么工具、还剩多久
+    const head = document.createElement("div");
+    head.className = "abanner-head";
     const host = sessions.find((x) => x.id === a.session);
-    what.textContent = `${host ? host.name : `#${a.session}`} · ${stateText(a)}`;
-    const acts = document.createElement("span");
-    acts.className = "abanner-acts";
-    for (const [label, decision] of [
-      [t("agent.allow"), "allow"],
-      [t("agent.deny"), "deny"],
-    ] as const) {
-      const b = document.createElement("button");
-      b.textContent = label;
-      b.addEventListener("click", async () => {
-        // 先禁用整行,避免连点造成两次提交(第二次会拿到 409)
-        acts.querySelectorAll("button").forEach((x) => ((x as HTMLButtonElement).disabled = true));
-        const outcome = await answerPending(token(), a.pending!, decision);
-        if (outcome !== "ok") {
-          const msg =
-            outcome === "gone" ? t("agent.gone")
-            : outcome === "already" ? t("agent.already")
-            : t("agent.failed");
-          what.textContent = `${what.textContent} — ${msg}`;
-        }
-        // 不管结果如何都摘掉本地这条:服务端会用 agent-event 把真相推回来
-        a.pending = null;
-        renderAgentBanner();
-      });
-      acts.appendChild(b);
+    const who = document.createElement("span");
+    who.className = "abanner-who";
+    who.textContent = `${host ? host.name : `#${a.session}`} · ${
+      detail?.tool_name ?? a.detail ?? t("agent.unknownTool")
+    }`;
+    head.appendChild(who);
+    if (detail) {
+      const left = document.createElement("span");
+      left.className = "abanner-left";
+      ticks.push({ el: left, expiresAt: detail.expires_at });
+      head.appendChild(left);
     }
+    row.appendChild(head);
+
+    // 第二行:提醒 + 命令原文。**这两行是这个横幅存在的理由**
+    if (detail) {
+      const hint = document.createElement("div");
+      hint.className = "abanner-hint";
+      hint.textContent = t("agent.reviewHint");
+      const cmd = document.createElement("pre");
+      cmd.className = "abanner-cmd";
+      cmd.textContent = describeToolInput(detail.tool_input);
+      row.append(hint, cmd);
+    }
+
+    // 第三行:拒绝理由 + 按钮
+    const acts = document.createElement("div");
+    acts.className = "abanner-acts";
+    const reason = document.createElement("input");
+    reason.className = "abanner-reason";
+    reason.type = "text";
+    reason.placeholder = t("agent.denyReason");
+    const status = document.createElement("span");
+    status.className = "abanner-status";
+
+    const submit = async (decision: "allow" | "deny", btns: HTMLButtonElement[]) => {
+      btns.forEach((b) => (b.disabled = true));
+      const msg = reason.value.trim() || undefined;
+      const outcome = await answerPending(token(), a.pending!, decision, msg);
+      if (outcome !== "ok") {
+        status.textContent =
+          outcome === "gone" ? t("agent.gone")
+          : outcome === "already" ? t("agent.already")
+          : t("agent.failed");
+      }
+      pendingDetails.delete(a.pending!);
+      // 不管结果如何都先摘掉本地这条;服务端会用 agent-event 把真相推回来
+      a.pending = null;
+      renderAgentBanner();
+      renderSidebar();
+    };
+
+    // 拒绝排在前面、样式朴素;允许在后面、带强调色。
+    // 一个可能执行 rm -rf 的动作不该和「算了」视觉等重,更不该是顺手就点到的那个。
+    const deny = document.createElement("button");
+    deny.textContent = t("agent.deny");
+    const allow = document.createElement("button");
+    allow.className = "abanner-allow";
+    allow.textContent = t("agent.allow");
+    deny.addEventListener("click", () => submit("deny", [deny, allow]));
+    allow.addEventListener("click", () => submit("allow", [deny, allow]));
+
     const go = document.createElement("button");
     go.textContent = t("agent.openSession");
     go.addEventListener("click", () => {
       if (a.session != null) openTerminal(a.session);
     });
-    acts.appendChild(go);
-    row.append(what, acts);
+
+    acts.append(reason, deny, allow, go, status);
+    row.appendChild(acts);
     box.appendChild(row);
   }
+
+  // 倒计时只改那一个 span,不整体重绘 —— 重绘会把用户正在写的拒绝理由清掉
+  if (ticks.length > 0) {
+    const paint = () => {
+      const now = Math.floor(Date.now() / 1000);
+      for (const { el, expiresAt } of ticks) {
+        const left = secondsLeft(expiresAt, now);
+        el.textContent = left > 0 ? t("agent.expiresIn", { n: left }) : t("agent.expired");
+        el.classList.toggle("is-expired", left === 0);
+      }
+    };
+    paint();
+    countdownTimer = setInterval(paint, 1000);
+  }
+}
+
+/**
+ * 补齐挂起详情。广播只说「有事了」,命令原文得单独拉一次(协议 R4:控制通道不走
+ * 大块数据)。拉完重绘一次。
+ */
+async function refreshPendingDetails() {
+  const want = waitingList(agents).map((a) => a.pending!);
+  if (want.length === 0) {
+    pendingDetails.clear();
+    return;
+  }
+  if (want.every((id) => pendingDetails.has(id))) return; // 已经齐了,别白跑
+  for (const p of await fetchPending(token())) pendingDetails.set(p.id, p);
+  renderAgentBanner();
 }
 
 /** 全量拉取。页面打开和每次重连后都要做一次(协议 A5)。 */
@@ -494,6 +595,7 @@ async function refreshAgents() {
   renderSidebar();
   renderSessionList();
   renderAgentBanner();
+  void refreshPendingDetails();
 }
 
 client.onChannelData = (channel, payload) => {
@@ -520,6 +622,7 @@ client.onControl = (msg) => {
       renderSidebar();
       renderSessionList();
       renderAgentBanner();
+      void refreshPendingDetails();
       break;
     case "preview-data": {
       const p = previews.get(msg.id);

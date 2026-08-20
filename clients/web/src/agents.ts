@@ -99,10 +99,36 @@ const STATE_KEY: Record<AgentState, MsgKey> = {
   error: "agent.state.error",
 };
 
-/** 给人看的一行:状态名 +(如果有)细节。细节原样显示,不解析。 */
+/**
+ * `Notification` 事件的 `notification_type` 是机器串(`permission_prompt` 之类),
+ * 直接显示在中文界面里很糙。认得出的翻译掉,认不出的原样返回 —— 因为 `detail`
+ * 这个字段是复用的:它也可能是工具名(`Bash`、`Edit`),那种原样显示才对。
+ */
+const NOTIFICATION_KEY: Record<string, MsgKey> = {
+  permission_prompt: "agent.notice.permission",
+  idle_prompt: "agent.notice.idle",
+  agent_needs_input: "agent.notice.input",
+  elicitation_dialog: "agent.notice.choice",
+};
+
+function detailText(detail: string | null): string | null {
+  if (!detail) return null;
+  const key = NOTIFICATION_KEY[detail];
+  return key ? t(key) : detail;
+}
+
+/**
+ * 给人看的一行。
+ *
+ * `waiting` 有**两种**来源,必须分开说:有 `pending` 的是「这里能回答」,没有的是
+ * `Notification` 报来的「它在终端那边等你」。混成同一句话的话,后者会显示成一个
+ * 醒目的「等你回答」,而用户点遍界面也找不到能回答的地方。
+ */
 export function stateText(s: AgentSession): string {
-  const name = t(STATE_KEY[s.state]);
-  return s.detail ? `${name} · ${s.detail}` : name;
+  const key = s.state === "waiting" && !s.pending ? "agent.state.waitingTerminal" : STATE_KEY[s.state];
+  const name = t(key);
+  const detail = detailText(s.detail);
+  return detail ? `${name} · ${detail}` : name;
 }
 
 /* ---------- HTTP ---------- */
@@ -261,4 +287,63 @@ export function summarizePlan(edits: PlanEdit[]): { path: string; events: string
     byPath.set(e.path, list);
   }
   return [...byPath.entries()].map(([path, events]) => ({ path, events }));
+}
+
+/** 一条挂起请求的完整详情。**决定要不要放行,靠的就是这里面的东西。** */
+export interface PendingDetail {
+  id: string;
+  agent_id: string;
+  agent_session_id: string;
+  session: number | null;
+  tool_name: string | null;
+  /** 工具入参原文。命令、文件路径都在这儿 —— 不展示它就等于让人盲签。 */
+  tool_input: unknown;
+  created_at: number;
+  /** unix 秒。服务端按自己的超时配置算好,客户端不猜。 */
+  expires_at: number;
+}
+
+/**
+ * 拉挂起请求的详情。
+ *
+ * 为什么不把这些塞进 `agent-event` 广播:控制通道有 4 KiB 上限,而且协议 R4 明确
+ * 不许在那里走大块数据 —— 命令原文可以很长。广播只负责说「有事了」,详情走 HTTP,
+ * 和会话全量快照(A5)是同一个路子。
+ */
+export async function fetchPending(token: string): Promise<PendingDetail[]> {
+  try {
+    const r = await fetch("/api/agents/pending", { headers: authHeaders(token) });
+    if (!r.ok) return [];
+    const body = await r.json();
+    return Array.isArray(body?.pending) ? body.pending : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 把工具入参压成一行给人看的命令。
+ *
+ * 优先取 `command`(shell 类工具),否则 `file_path`,再否则整个 JSON。**不截断** ——
+ * 截断正是「看不清自己在批准什么」的另一种形式,长就让它自己滚动。
+ */
+export function describeToolInput(input: unknown): string {
+  if (input == null) return "";
+  if (typeof input === "string") return input;
+  if (typeof input === "object") {
+    const o = input as Record<string, unknown>;
+    for (const key of ["command", "file_path", "path", "url"]) {
+      if (typeof o[key] === "string") return o[key] as string;
+    }
+  }
+  try {
+    return JSON.stringify(input, null, 2);
+  } catch {
+    return String(input);
+  }
+}
+
+/** 还剩多少秒。已过期返回 0。 */
+export function secondsLeft(expiresAt: number, nowSecs: number): number {
+  return Math.max(0, expiresAt - nowSecs);
 }

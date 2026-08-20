@@ -11,7 +11,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 });
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
-  summarizePlan, fetchAgentPlan,
+  summarizePlan, fetchAgentPlan, describeToolInput, secondsLeft, stateText, fetchPending,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -116,4 +116,43 @@ test("agent id 进 URL 前要转义", async () => {
   globalThis.fetch = async (url) => { seen = url; return { ok: true, json: async () => ({}) }; };
   await fetchAgentPlan("tok", "a/b c");
   assert.equal(seen, "/api/agents/a%2Fb%20c/plan");
+});
+
+test("命令原文要原样拿出来 —— 看不清就是盲签", () => {
+  assert.equal(describeToolInput({ command: "rm -rf build/" }), "rm -rf build/");
+  assert.equal(describeToolInput({ file_path: "/etc/hosts" }), "/etc/hosts");
+  assert.equal(describeToolInput("plain string"), "plain string");
+});
+
+test("认不出的入参也要显示,而不是显示空白", () => {
+  const out = describeToolInput({ weird: 1, nested: { a: 2 } });
+  assert.match(out, /weird/);
+  assert.match(out, /nested/);
+  assert.equal(describeToolInput(null), "");
+});
+
+test("倒计时不会变成负数", () => {
+  assert.equal(secondsLeft(100, 40), 60);
+  assert.equal(secondsLeft(100, 100), 0);
+  assert.equal(secondsLeft(100, 999), 0);
+});
+
+/// waiting 的两种来源必须说成不同的话:有 pending 的「这里能回答」,
+/// 没有的是 Notification 报来的「它在终端那边等你」。
+test("两种 waiting 的文案不同", () => {
+  const withPending = ev({ state: "waiting", pending: "p1" });
+  const noPending = ev({ state: "waiting", pending: null });
+  assert.notEqual(stateText(withPending), stateText(noPending));
+});
+
+test("notification_type 这种机器串要翻译,工具名原样显示", () => {
+  const notice = stateText(ev({ state: "waiting", pending: null, detail: "permission_prompt" }));
+  assert.ok(!notice.includes("permission_prompt"), `机器串漏到界面上了: ${notice}`);
+  const tool = stateText(ev({ state: "working", detail: "Bash" }));
+  assert.ok(tool.includes("Bash"), "工具名应当原样显示");
+});
+
+test("挂起详情拉不到时降级为空数组(协议 T12)", async () => {
+  globalThis.fetch = async () => ({ ok: false, status: 404 });
+  assert.deepEqual(await fetchPending("tok"), []);
 });

@@ -105,6 +105,9 @@ pub struct PendingRequest {
     /// 工具入参。可能很长(命令原文),客户端自己决定怎么截断展示。
     pub tool_input: serde_json::Value,
     pub created_at: u64,
+    /// 什么时候作废(unix 秒)。**必须由服务端算好给出去** —— 超时长度是服务端配置,
+    /// 客户端不知道也不该猜;而「我还有多久」正是决定要不要现在处理的关键信息。
+    pub expires_at: u64,
 }
 
 struct PendingEntry {

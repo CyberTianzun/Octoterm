@@ -338,8 +338,8 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 /* ---------- agent 集成 ---------- */
 
 
-/* 「有 AI 在等你」横幅。压在 reconnect(6)之下、error(7)之上不合适 ——
-   它不是故障,是待办,所以放在两者之下,故障信息永远盖得住它。 */
+/* 「有 AI 在等你」横幅。压在 reconnect(6)与 error(7)之下:那两个是故障,
+   这个是待办 —— 故障永远该盖得住待办。 */
 #agent-banner {
   position: absolute;
   top: 0;
@@ -348,38 +348,71 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   z-index: 5;
   background: #4a3a00;
   color: #ffe9b0;
-  padding: 6px 10px;
+  padding: 8px 10px;
   font-size: 13px;
+  max-height: 60%;
+  overflow-y: auto;
 }
-.abanner-title {
-  font-weight: 600;
-  margin-bottom: 4px;
-}
+.abanner-title { font-weight: 600; margin-bottom: 6px; }
 .abanner-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 233, 176, 0.18);
 }
-.abanner-what {
+.abanner-row:first-of-type { border-top: none; }
+.abanner-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.abanner-who {
   flex: 1;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.abanner-left { flex: none; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.abanner-left.is-expired { color: #ff9b9b; opacity: 1; }
+.abanner-hint { margin: 4px 0 4px; opacity: 0.85; font-size: 12px; }
+
+/* 命令原文。**不截断** —— 截断就是另一种形式的看不清自己在批准什么。
+   长了就让它自己滚动,横向也一样(命令不该被折行改变语义外观)。 */
+.abanner-cmd {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  max-height: 8.5em;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre;
+  color: #fff6df;
+}
 .abanner-acts {
   display: flex;
+  align-items: center;
   gap: 6px;
-  flex: none;
+  flex-wrap: wrap;
 }
-.abanner-acts button {
-  padding: 2px 10px;
-  cursor: pointer;
+.abanner-reason {
+  flex: 1;
+  min-width: 8em;
+  padding: 3px 8px;
+  font-size: 12px;
 }
-.abanner-acts button:disabled {
-  opacity: 0.5;
-  cursor: default;
+.abanner-acts button { padding: 3px 12px; cursor: pointer; }
+.abanner-acts button:disabled { opacity: 0.5; cursor: default; }
+/* 「允许」带强调色:它是唯一会让远端立刻执行点什么的按钮,不该和「算了」等重。
+   顺序上它也排在拒绝后面,不做顺手就点到的那一个。 */
+.abanner-allow {
+  background: #ffb020;
+  color: #241a00;
+  border-color: #ffb020;
+  font-weight: 700;
 }
+.abanner-status { font-size: 12px; opacity: 0.9; }
 
 .agent-list { display: flex; flex-direction: column; gap: 10px; }
 .agent-card {

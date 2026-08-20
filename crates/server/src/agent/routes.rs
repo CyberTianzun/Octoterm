@@ -309,26 +309,31 @@ async fn blocking_hook(
     session: u64,
     payload: &serde_json::Value,
 ) -> Response {
-    // 先确保会话存在(不改状态),挂起项才有地方挂
+    let tool_name = payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string);
+    // 先确保会话存在,并把工具名带进去 —— 广播出去的 `AgentEvent.detail` 就是它。
+    // 命令原文(`tool_input`)**不进广播**:控制通道有 4 KiB 上限且不许走大块数据
+    // (协议 §10 / R4),客户端要详情就去拉 `/api/agents/pending`。
     state.agent_sessions.apply(
         adapter.id(),
         agent_session_id,
         Some(session),
-        Update::default(),
+        Update { detail: tool_name.clone(), ..Default::default() },
     );
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     let id = uuid::Uuid::new_v4().simple().to_string();
     let meta = PendingRequest {
         id: id.clone(),
         agent_id: adapter.id().to_string(),
         agent_session_id: agent_session_id.to_string(),
         session: Some(session),
-        tool_name: payload.get("tool_name").and_then(|v| v.as_str()).map(str::to_string),
+        tool_name,
         tool_input: payload.get("tool_input").cloned().unwrap_or(serde_json::Value::Null),
-        created_at: std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
+        created_at: now,
+        expires_at: now + state.agents.pending_timeout_secs,
     };
 
     let rx = state.agent_sessions.insert_pending(meta);

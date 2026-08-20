@@ -114,6 +114,32 @@ async fn second_answer_is_conflict_not_found() {
     );
 }
 
+/// 挂起请求必须带着**足够做决定的信息**出来:工具名、命令原文、截止时间。
+///
+/// 这是线上复盘出来的 —— 第一版横幅只显示「会话名 · 等你回答」,等于让人一键批准
+/// 一条看不见的命令。数据一直都在服务端,只是没送出去。
+#[tokio::test]
+async fn pending_carries_enough_to_decide_on() {
+    let addr = server(30).await;
+    let hook = tokio::spawn(async move { permission_request(addr).send().await.unwrap() });
+    let id = wait_for_pending(addr).await;
+
+    let v = get_json(addr, "/api/agents/pending").await;
+    let p = &v["pending"][0];
+    assert_eq!(p["tool_name"], "Bash");
+    assert_eq!(p["tool_input"]["command"], "rm -rf /", "命令原文必须原样带出来");
+    let created = p["created_at"].as_u64().unwrap();
+    let expires = p["expires_at"].as_u64().unwrap();
+    assert_eq!(expires - created, 30, "截止时间由服务端按配置算好,客户端不该猜");
+
+    // 广播里也要有工具名,这样没拉详情之前列表上就不是一句「等你回答」
+    let s = get_json(addr, "/api/agents/sessions").await;
+    assert_eq!(s["sessions"][0]["detail"], "Bash");
+
+    answer(addr, &id, "deny").await;
+    let _ = hook.await;
+}
+
 #[tokio::test]
 async fn unknown_pending_is_404() {
     let addr = server(30).await;
