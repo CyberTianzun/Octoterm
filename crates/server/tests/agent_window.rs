@@ -219,3 +219,48 @@ fn a_reset_window_is_capped_by_bytes_not_just_by_count() {
     // 丢的必须是最旧的一头 —— 首屏要的是最近发生的事
     assert_eq!(out.last().unwrap().id, "m99");
 }
+
+/// **前进保证**:一行比增量上限还长时,游标绝不能原地不动。
+///
+/// 复现过的真实后果:服务端返回 `more: true` + 0 条消息 + 同一个游标,客户端照着
+/// `more` 再拉一次,于是永远拉下去 —— 浏览器主线程被打满,整个界面失去响应。
+/// 真实会话里很容易触发:一次 cat 大文件的 tool_result,单行超过 256 KiB 很正常。
+#[test]
+fn an_overlong_line_never_stalls_the_cursor() {
+    use octoterm_server::agent::transcript::INCREMENT_BYTES;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.jsonl");
+    std::fs::write(&p, line("m0", "short")).unwrap();
+    let first = read_window(&p, None, &parse).unwrap();
+
+    // 追加一条远超增量上限的单行
+    let huge = format!(
+        r#"{{"type":"assistant","uuid":"big","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}}}}"#,
+        "z".repeat(INCREMENT_BYTES as usize + 5000)
+    ) + "\n";
+    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    f.write_all(huge.as_bytes()).unwrap();
+    f.flush().unwrap();
+
+    let w = read_window(&p, Some(&first.cursor), &parse).unwrap();
+    assert_ne!(w.cursor, first.cursor, "游标原地不动 —— 客户端会在这里无限循环");
+    assert_eq!(w.messages.len(), 1, "扩窗之后这条超长记录仍应当被完整读到");
+}
+
+/// 长到连首屏窗口都放不下时,宁可丢掉这一条也绝不停在原地。
+#[test]
+fn a_line_longer_than_the_window_is_skipped_not_stalled() {
+    use octoterm_server::agent::transcript::WINDOW_BYTES;
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("t.jsonl");
+    std::fs::write(&p, line("m0", "short")).unwrap();
+    let first = read_window(&p, None, &parse).unwrap();
+
+    let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    f.write_all(&vec![b'x'; WINDOW_BYTES as usize + 1000]).unwrap();
+    f.write_all(b"\n").unwrap();
+    f.flush().unwrap();
+
+    let w = read_window(&p, Some(&first.cursor), &parse).unwrap();
+    assert_ne!(w.cursor, first.cursor, "游标必须前进,哪怕代价是丢掉这一条");
+}

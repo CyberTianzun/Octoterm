@@ -131,13 +131,6 @@ button:hover { border-color: var(--accent); color: var(--accent); }
   text-align: center;
   padding: 6px 10px;
 }
-#workspace-empty {
-  flex: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--dim);
-}
 #terminal-wrap { flex: 1; min-height: 0; padding: 6px; }
 /* 尺寸是服务端说了算的(多端 attach 时取归并结果),未必正好填满视口:
    小于视口就居中留白,大于视口就滚动。safe 保证溢出时不会把左上角切掉。

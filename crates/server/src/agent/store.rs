@@ -73,6 +73,10 @@ pub struct AgentSession {
     /// 原样发给客户端:它由 `cwd` + 会话 id 推导而来,而这两样客户端本来就有,
     /// 所以没有泄漏新东西;客户端只把它当「有没有」的信号用。
     pub transcript: Option<String>,
+    /// 这家 agent 的对话记录能不能读。客户端据此在同一个托管会话里**优先挑读得了的
+    /// 那个** —— 一个会话里先后跑过两家 agent 是常事,按状态优先级挑出来的那个未必
+    /// 是能看聊天的那个。
+    pub supports_transcript: bool,
     /// 有值 = 正在等人回答。Task 6 接上阻塞式决策后由它填。
     pub pending: Option<String>,
     pub updated_at: u64,
@@ -226,6 +230,7 @@ impl AgentSessionStore {
         session: Option<u64>,
         up: Update,
     ) -> AgentSession {
+        let supports = crate::agent::find(agent_id).is_some_and(|a| a.supports_transcript());
         let key = (agent_id.to_string(), agent_session_id.to_string());
         let mut guard = self.sessions.lock().unwrap();
         let entry = guard.entry(key).or_insert_with(|| AgentSession {
@@ -237,6 +242,7 @@ impl AgentSessionStore {
             cwd: None,
             title: None,
             transcript: None,
+            supports_transcript: false,
             pending: None,
             updated_at: now(),
             acked_at: 0,
@@ -257,6 +263,7 @@ impl AgentSessionStore {
         if up.transcript.is_some() {
             entry.transcript = up.transcript;
         }
+        entry.supports_transcript = supports;
         if session.is_some() {
             entry.session = session;
         }
@@ -460,6 +467,7 @@ mod tests {
             cwd: None,
             title: None,
             transcript: None,
+            supports_transcript: false,
             pending: None,
             updated_at,
             acked_at: 0,

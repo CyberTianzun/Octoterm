@@ -26,6 +26,8 @@ export interface AgentSession {
   detail: string | null;
   /** 有值 = 正在等人回答,值是回答时要带的自然键 */
   pending: string | null;
+  /** 这家 agent 的对话记录能不能读(聊天视图靠它) */
+  supports_transcript?: boolean;
 }
 
 export type AgentMap = Map<string, AgentSession>;
@@ -75,6 +77,24 @@ export function forSession(map: AgentMap, sessionId: number): AgentSession | nul
     if (!best || PRIORITY[s.state] > PRIORITY[best.state]) best = s;
   }
   return best;
+}
+
+/**
+ * 聊天视图该看哪个 agent。
+ *
+ * 和 `forSession` 不同:那个按**状态**优先级挑(谁最该被看见),这个按**能不能读记录**
+ * 挑。一个托管会话里先后跑过两家 agent 是常事(先 codex 后 claude),而按状态挑出来
+ * 的那个未必是能看聊天的那个 —— 结果就是明明终端里有输出,聊天视图却说「这个 AI 的
+ * 对话记录暂时还读不了」。读得了的优先;都读不了才回退到状态最高的那个,好让回落
+ * 文案仍能说出是哪一家。
+ */
+export function chatAgentFor(map: AgentMap, sessionId: number): AgentSession | null {
+  let readable: AgentSession | null = null;
+  for (const s of map.values()) {
+    if (s.session !== sessionId || !s.supports_transcript) continue;
+    if (!readable || PRIORITY[s.state] > PRIORITY[readable.state]) readable = s;
+  }
+  return readable ?? forSession(map, sessionId);
 }
 
 /** 所有正在等人回答的。按托管会话 id 排序,让列表稳定不跳。 */

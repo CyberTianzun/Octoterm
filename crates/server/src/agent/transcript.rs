@@ -202,12 +202,44 @@ pub fn read_window(
 
     let mut f = std::fs::File::open(path)?;
     f.seek(SeekFrom::Start(plan.start))?;
-    let mut buf = vec![0u8; (plan.end - plan.start) as usize];
+    let mut want = (plan.end - plan.start) as usize;
+    let mut buf = vec![0u8; want];
     let n = f.read(&mut buf)?;
     buf.truncate(n);
 
     // 只有「跳进文件中段」时才丢开头那半行;续读的起点本来就是行首
-    let (body, consumed) = slice_window(&buf, 0, plan.reset && plan.start > 0);
+    let (mut body_len, mut consumed) = {
+        let (b, c) = slice_window(&buf, 0, plan.reset && plan.start > 0);
+        (b.len(), c)
+    };
+
+    // **前进保证**。一整段里一个换行都没有,说明这一行比增量上限还长(一次 cat 大
+    // 文件的 tool_result 就能做到)。此时 consumed 为 0,游标原地不动,而 `more` 仍是
+    // true —— 客户端照着 `more` 再拉一次,就会永远拉下去。实测过:浏览器主线程被打满,
+    // 整个界面失去响应。
+    //
+    // 先把这一段扩到首屏窗口那么大再找一次换行,让 4 MiB 以内的长行仍能完整读到;
+    // 真的还找不到,就**强制推进**,宁可丢掉这一条也绝不停在原地。
+    if consumed == 0 && plan.more {
+        want = (WINDOW_BYTES as usize).min((file_len - plan.start) as usize);
+        buf = vec![0u8; want];
+        f.seek(SeekFrom::Start(plan.start))?;
+        let n = f.read(&mut buf)?;
+        buf.truncate(n);
+        let (b, c) = slice_window(&buf, 0, plan.reset && plan.start > 0);
+        body_len = b.len();
+        consumed = c;
+        if consumed == 0 {
+            tracing::warn!(
+                bytes = buf.len(),
+                "transcript 里有一行长过窗口上限,跳过它以保证游标前进"
+            );
+            consumed = buf.len() as u64;
+            body_len = 0;
+        }
+    }
+
+    let body = &buf[..body_len];
     // 记录里可能混进非法字节(截断的多字节字符),不能让它把整次读取变成错误
     let text = String::from_utf8_lossy(body);
     let mut messages = parse(&text);

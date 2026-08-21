@@ -35,6 +35,7 @@ import {
   secondsLeft,
   applyEvent,
   fetchAgentSessions,
+  chatAgentFor,
   forSession,
   replaceAll,
   stateText,
@@ -407,9 +408,9 @@ client.onFatal = (message) => {
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
-/** 当前 attach 的会话上绑着哪个 agent 会话。没有就不提供聊天视图。 */
+/** 聊天视图该看当前会话里的哪个 agent。挑「读得了记录的那个」,见 chatAgentFor。 */
 function attachedAgent(): AgentSession | null {
-  return attachedId === null ? null : forSession(agents, attachedId);
+  return attachedId === null ? null : chatAgentFor(agents, attachedId);
 }
 
 function syncViewToggle() {
@@ -462,9 +463,14 @@ async function refreshChat(incremental: boolean) {
   }
   chatFallback = null;
   chatMessages = mergeWindow(incremental ? chatMessages : [], win);
+  const advanced = win.cursor !== chatCursor;
   chatCursor = win.cursor;
   renderChat();
-  if (win.more) void refreshChat(true);
+  // **前进保证**。`more` 说「还有」,但只有游标真的动了才说明这一轮读到了东西;
+  // 游标原地不动还继续拉,就是一个打满主线程、界面彻底失去响应的死循环 ——
+  // 这不是假想,是复现过的。服务端那边也补了前进保证,但客户端不该把「不会卡死」
+  // 寄托在服务端不出错上。
+  if (win.more && advanced) void refreshChat(true);
 }
 
 function blockNode(b: ChatMessage["blocks"][number]): HTMLElement {
