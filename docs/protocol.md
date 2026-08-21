@@ -35,7 +35,9 @@ scope:         everything on the wire between a client and octoterm-server
 | protocol integration tests | `crates/server/tests/ws_{auth,control,attach,geometry}.rs` |
 | side-channel integration tests | `crates/server/tests/http_launchers.rs` |
 | agent integration (server side) | `crates/server/src/agent/` |
-| agent integration tests | `crates/server/tests/agent_{detect,edit,install,hook}.rs` |
+| agent integration tests | `crates/server/tests/agent_{detect,edit,install,hook,pending,codex}.rs` |
+| chat view (transcript reading) | `crates/server/src/agent/{transcript,claude_transcript}.rs` |
+| chat view tests | `crates/server/tests/agent_{transcript,window,messages}.rs` |
 
 ## 2. Transport [T]
 
@@ -99,6 +101,9 @@ scope:         everything on the wire between a client and octoterm-server
 | `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
 | `POST /api/agents/{id}/uninstall` | same | T10a |
 | `GET /api/agents/sessions` | `{ "sessions": [AgentSession] }` | full snapshot; a client re-fetches this after every reconnect (A5) |
+| `GET /api/agents/pending` | `{ "pending": [PendingRequest] }` | what is blocked waiting for a human, with the tool name and arguments needed to decide |
+| `POST /api/agents/answer` | `200` / `404` / `409` | T10a; answers one pending request. `409` = someone already answered it |
+| `GET /api/agents/messages` | see §15 A9 | the conversation itself, for a chat-style view |
 
 ### 2.2 `GET /api/launchers` [T]
 
@@ -419,6 +424,10 @@ Current corpus (reference only, see E4):
 | launcher entries per provider | 100 | `launcher/mod.rs PER_PROVIDER_CAP` |
 | `agent-event` payload | 4 KiB | §15 A4 |
 | agent hook request body | 512 KiB | `app.rs` route layer |
+| chat window, first load | 200 messages / 256 KiB | `transcript.rs MAX_MESSAGES`, `MAX_RESPONSE_BYTES` |
+| chat window, increment | 256 KiB of raw transcript | `transcript.rs INCREMENT_BYTES` |
+| chat block text | 8 KiB, truncated and marked | `transcript.rs MAX_BLOCK_BYTES` |
+| transcript tail scanned on first load | 4 MiB | `transcript.rs WINDOW_BYTES` |
 | reference reconnect backoff | 250 ms doubling, cap 10 s | `client-core`, `client.ts` |
 
 ## 11. Compatibility and versioning [X]
@@ -562,6 +571,23 @@ Every item MUST be answered in the proposal.
   typing into it is ordinary session input on a data channel (§7) — indis-
   tinguishable from a human at the keyboard, and counted in `seq` like any other
   output it produces.
+- **A9** `GET /api/agents/messages` returns the conversation itself, normalized to a
+  **client-neutral** shape — the client never sees an agent's own message schema
+  (R13). Two rules matter more than the shape:
+  - **Failure is typed, never an empty list.** The reply is either
+    `{ source:"transcript", messages, cursor, reset, more }` or
+    `{ source:"terminal", reason }` with `reason` one of `disabled`,
+    `no-transcript-path`, `unsupported-agent`, `unreadable`, `parse-failed`. A
+    client MUST render the reason and offer the terminal view; an empty chat is
+    worse than an explanation, because it reads as "there is no conversation".
+  - **`cursor` is opaque.** Clients pass it back unchanged and MUST NOT parse it.
+    `reset: true` means replace everything held, not append: the server has
+    decided the old cursor no longer refers to the same timeline (the transcript
+    was compacted, or the session was replaced).
+  `more: true` means the reply was cut by the byte cap (§10); the client should
+  immediately fetch again with the new cursor. Bulk conversation text never
+  travels on the control channel (R4) — that is why this is a `/api/` route and
+  `agent-event` only says "something changed".
 - **A8** The server↔agent side of this feature (how hooks are installed into a
   third-party agent's configuration, and the `/hook/...` ingress they call) is
   **not part of this document**: it is not on the wire between a client and

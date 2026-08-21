@@ -3,7 +3,7 @@
 //! 这部分**与 agent 无关** —— 三家的文件都是「一行一条、只追加」,只有「一行是什么
 //! 意思」属于各自的 adapter。C3 加 Codex / Grok 时这里一行都不用改。
 
-use octoterm_server::agent::transcript::{plan_read, Plan, INCREMENT_BYTES, WINDOW_BYTES};
+use octoterm_server::agent::transcript::{plan_read, INCREMENT_BYTES, WINDOW_BYTES};
 
 /// 第一屏要的是**最近**发生的事,不是这个会话最早的几句。
 #[test]

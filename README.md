@@ -111,6 +111,19 @@ it keeps talking to the old address until you close it yourself; only new
 connections pick up the new one. Quitting the app does terminate every
 session, so it asks for confirmation first if any are running.
 
+**The chat view, and what it exposes**: when a hosted session is running Claude
+Code, you can open it as a structured message stream instead of a VT screen. It
+reads the agent's own transcript — **read-only, never cached, never written** —
+and is gated by `agents.transcript_enabled`, **off by default**.
+
+That is a separate switch from installing hooks on purpose: hooks let octoterm
+see *what it is doing*, this one lets it see *what was said* — code, paths,
+commands, the model's reasoning. An order of magnitude more exposure, and not
+something the first switch should quietly imply. **Read it together with the
+next paragraph**: the desktop app listens on every interface by default, so with
+both turned on, anyone on your LAN holding the token can read your whole
+conversation.
+
 **It listens on `0.0.0.0:7683` by default — unlike `octoterm-server`.** Reaching
 your machine from a phone or tablet is the whole point of the desktop app, and a
 loopback-only default makes it unusable out of the box. Two hard boundaries make

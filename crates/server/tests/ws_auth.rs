@@ -51,13 +51,14 @@ async fn config_load_reads_existing_and_fills_defaults() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "listen = \"0.0.0.0:1234\"\ntoken = \"fixed\"\n").unwrap();
     let c = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
-    assert_eq!(c.listen.to_string(), "0.0.0.0:1234");
+    assert_eq!(c.listen.map(|l| l.to_string()).as_deref(), Some("0.0.0.0:1234"));
     assert_eq!(c.token.as_deref(), Some("fixed"));
 
-    // 部分字段配置:缺省字段自动补全
+    // 没写 listen 时**保持 None**,而不是在这一层补一个默认值 —— server 与 desktop
+    // 的默认监听不一样(只回环 vs 全网卡),谁用谁定。
     std::fs::write(&path, "token = \"only\"\n").unwrap();
     let c = octoterm_server::config::Config::load(Some(path)).unwrap();
-    assert_eq!(c.listen.to_string(), "127.0.0.1:7683");
+    assert_eq!(c.listen, None, "「没写」不该在 Config 这一层被抹成默认值");
     assert_eq!(c.token.as_deref(), Some("only"));
 }
 

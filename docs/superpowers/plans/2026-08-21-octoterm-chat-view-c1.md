@@ -50,7 +50,7 @@ clients/web/src/chat.ts                      聊天视图的数据层
 **Interfaces:**
 - Produces: `transcript::{Message, Block, Role}`;`AgentSession.transcript: Option<String>`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[test] fn transcript_path_is_kept_from_the_hook_payload() {}
@@ -59,7 +59,7 @@ clients/web/src/chat.ts                      聊天视图的数据层
 
 第二条对应已经犯过一次的错:`Update` 里 `None` 是「这次没说」,不是「清空」。
 
-- [ ] **Step 2: 消息模型**
+- [x] **Step 2: 消息模型**
 
 ```rust
 #[derive(Serialize)] #[serde(rename_all = "kebab-case")]
@@ -81,7 +81,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 
 **不透传未知块类型** —— 认不出的归一化成 `Text` 或直接丢弃。这是 R13 要挡的事。
 
-- [ ] **Step 3: 存路径**
+- [x] **Step 3: 存路径**
 
 `Update` 加 `transcript: Option<String>`,`claude_code::parse` 从 payload 取
 `transcript_path`,`AgentSession` 存下来。只覆盖有值的字段(和 `cwd` / `title` 同规则)。
@@ -95,7 +95,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 - Create: `crates/server/tests/fixtures/claude-transcript.jsonl`(脱敏样本)
 - Modify: `agent/mod.rs`(trait 加 `parse_transcript`)、`claude_code.rs`
 
-- [ ] **Step 1: 造脱敏 fixture**
+- [x] **Step 1: 造脱敏 fixture**
 
 从本机一份**真实**会话抽 30~50 行,把文本内容替换成占位符,**保留结构**:
 `user` / `assistant` 记录、`text` / `thinking` / `tool_use` / `tool_result` 四种块、
@@ -103,7 +103,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 
 合成数据在这里没有价值 —— 真实风险全在「真文件里到底长什么样」。
 
-- [ ] **Step 2: 写失败的测试**
+- [x] **Step 2: 写失败的测试**
 
 ```rust
 #[test] fn four_block_kinds_are_normalized() {}
@@ -117,7 +117,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 
 倒数第二条是增量的地基:同一条消息读两次必须得到同一个 `id`,否则客户端会重复渲染。
 
-- [ ] **Step 3: 实现**
+- [x] **Step 3: 实现**
 
 `fn parse_transcript(&self, text: &str) -> Option<Vec<Message>>`。整段文本进,消息出;
 **逐行解析,单行失败只跳过那一行** —— 一个坏字节不该让整个窗口变成「读不了」。
@@ -136,7 +136,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 窗口与游标**与 agent 无关**,所以放在共享模块;只有「一行是什么意思」是 adapter 的事。
 这是 C3 加 Codex/Grok 时能省下大量重复的地方。
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[test] fn first_read_returns_the_tail_not_the_head() {}      // 第一屏要最近的,不是最早的
@@ -150,7 +150,7 @@ pub struct Message { pub id: String, pub role: Role, pub ts: Option<u64>, pub bl
 第二条是这一 task 最容易写错的地方:按字节回切窗口一定会切在半行上,那半行必须丢掉,
 否则第一条消息是残的。
 
-- [ ] **Step 2: 实现**
+- [x] **Step 2: 实现**
 
 ```rust
 pub struct Window { pub messages: Vec<Message>, pub cursor: String, pub reset: bool }
@@ -172,7 +172,7 @@ pub struct Window { pub messages: Vec<Message>, pub cursor: String, pub reset: b
 **Interfaces:**
 - Produces: `GET /api/agents/messages?agent_id=&agent_session_id=&after=`
 
-- [ ] **Step 1: 写失败的测试**
+- [x] **Step 1: 写失败的测试**
 
 ```rust
 #[tokio::test] async fn disabled_by_default_falls_back_to_terminal() {}
@@ -182,7 +182,7 @@ pub struct Window { pub messages: Vec<Message>, pub cursor: String, pub reset: b
 #[tokio::test] async fn requires_the_client_bearer() {}
 ```
 
-- [ ] **Step 2: 回落是带类型的,不是空数组**
+- [x] **Step 2: 回落是带类型的,不是空数组**
 
 ```jsonc
 { "source": "transcript", "messages": [...], "cursor": "...", "reset": false }
@@ -194,7 +194,7 @@ pub struct Window { pub messages: Vec<Message>, pub cursor: String, pub reset: b
 Windows 上 Codex 会话「聊天界面渲染出一个空 transcript」。**空聊天框比说清原因更糟**:
 用户会以为对话真的是空的。
 
-- [ ] **Step 3: 配置与门控**
+- [x] **Step 3: 配置与门控**
 
 ```toml
 [agents]
@@ -204,7 +204,7 @@ transcript_enabled = false   # 默认关
 关着时不是 403 而是 `source: "terminal", reason: "disabled"` —— 这不是错误,是「你没开」,
 客户端据此显示一句说明 + 一个「用终端打开」。
 
-- [ ] **Step 4: 读文件是阻塞 IO**
+- [x] **Step 4: 读文件是阻塞 IO**
 
 `spawn_blocking`,照抄 `launchers_handler` 与 `agent::routes::list` 的写法。
 
@@ -216,7 +216,7 @@ transcript_enabled = false   # 默认关
 - Create: `clients/web/src/chat.ts`
 - Modify: `clients/web/src/{main.ts,i18n.ts,style.css,index.html}`
 
-- [ ] **Step 1: 数据层 + 测试**
+- [x] **Step 1: 数据层 + 测试**
 
 `chat.ts` 只放纯逻辑与 fetch,能被 node:test 直接跑(和 `agents.ts` 同规矩):
 
@@ -232,21 +232,21 @@ test: 增量按 id 去重,不重复渲染
 test: 路由缺失/报错降级为 source=terminal(T12)
 ```
 
-- [ ] **Step 2: 视图切换**
+- [x] **Step 2: 视图切换**
 
 会话上绑着 agent 时,终端顶栏出现「聊天 / 终端」切换。**默认仍是终端** —— C1 只读,
 不能发消息,把它设成默认会让人以为坏了。
 
-- [ ] **Step 3: 渲染**
+- [x] **Step 3: 渲染**
 
 四种块各自的样式;`thinking` **默认折叠**(它常常比正文长);`tool-use` 显示工具名 +
 那一行入参;`tool-result` 用 `ok` 区分正常/报错。
 
-- [ ] **Step 4: 增量**
+- [x] **Step 4: 增量**
 
 收到该会话的 `agent-event` 就带游标拉一次。**不做轮询** —— 没有事件就意味着没有新消息。
 
-- [ ] **Step 5: 回落**
+- [x] **Step 5: 回落**
 
 `source: "terminal"` 时按 `reason` 显示一句人话 + 一个「用终端打开」,**绝不画空聊天框**。
 
@@ -254,19 +254,75 @@ test: 路由缺失/报错降级为 source=terminal(T12)
 
 ### Task 6: 文档
 
-- [ ] `docs/protocol.md`:T13 路由表补一行;§10 补三条限额;§1 来源地图补 transcript 模块。
+- [x] `docs/protocol.md`:T13 路由表补一行;§10 补三条限额;§1 来源地图补 transcript 模块。
       **`PROTO_VERSION` 不动**,在提交信息里写明为什么不用动(只加 `/api/` 只读路由,T12)。
-- [ ] README 双语:说明聊天视图、默认关、以及**它与 desktop 默认监听 `0.0.0.0` 叠加后的
+- [x] README 双语:说明聊天视图、默认关、以及**它与 desktop 默认监听 `0.0.0.0` 叠加后的
       暴露面** —— 局域网里拿到 token 的人,现在能看终端画面,开了这个之后是整段对话。
-- [ ] spec 状态从「草案」改为「C1 已实施」。
+- [x] spec 状态从「草案」改为「C1 已实施」。
 
 ## 完成标准
 
-- [ ] `cargo test --workspace` 无 FAILED(**数 `^test result: FAILED` 的行数**,不看汇总)
-- [ ] `cargo clippy --workspace -- -D warnings` **退出码为 0**
-- [ ] `npx tsc --noEmit` 退出码为 0;`npm test` 无 fail
-- [ ] `PROTO_VERSION` 未改动
-- [ ] 开关关着时,`/api/agents/messages` 返回 `source: "terminal", reason: "disabled"`,
+- [x] `cargo test --workspace` 无 FAILED(**数 `^test result: FAILED` 的行数**,不看汇总)
+- [x] `cargo clippy --workspace -- -D warnings` **退出码为 0**
+- [x] `npx tsc --noEmit` 退出码为 0;`npm test` 无 fail
+- [x] `PROTO_VERSION` 未改动
+- [x] 开关关着时,`/api/agents/messages` 返回 `source: "terminal", reason: "disabled"`,
       且**没有读过任何 transcript 文件**
-- [ ] 用一份真实会话手工验证:聊天视图里的消息数、顺序、工具调用与终端里看到的一致
-- [ ] 把 transcript 文件改小(模拟 compact)后再拉一次 → `reset: true`,客户端整段替换
+- [x] 用一份真实会话手工验证:聊天视图里的消息数、顺序、工具调用与终端里看到的一致
+- [x] 把 transcript 文件改小(模拟 compact)后再拉一次 → `reset: true`,客户端整段替换
+
+
+---
+
+## 实施记录:C1(2026-08-21,已完成)
+
+Rust 无 FAILED、clippy 与 tsc 退出码均为 0、web 86 用例 0 失败,`PROTO_VERSION` 仍是 1
+(只新增 `/api/` 只读路由,T12 允许)。
+
+**真实数据验证**(一份 10 MB / 5258 行的会话记录):200 条消息、四种块齐全、工具名正确、
+id 全部唯一、响应 164 KiB。
+
+### 计划没写、实现时才发现的三件事
+
+1. **溢出时丢哪一头,两条路不一样**。首次加载丢最旧的是对的;增量丢头就是**静默丢
+   消息**。所以首次按条数限、增量按字节限(读不完置 `more` 让客户端再拉一次,一条不少)。
+   两条路用同一套限额的话,增量超限时会悄无声息地吞掉消息。
+
+2. **条数上限挡不住字节数**。这是拿真实数据量出来的:那次碰巧只产出 164 KiB,而
+   「碰巧在范围内」不是限额 —— 200 条里每条都塞满 8 KiB 的块能有好几 MB。补了
+   `MAX_RESPONSE_BYTES`,同样从最旧的一头丢。**不测真实数据就发现不了**:合成用例
+   我本来也只会造小消息。
+
+3. **`docs/protocol.md` 的 T13 表漏了两行**。`/api/agents/pending` 与
+   `/api/agents/answer` 是上一期加的路由,当时没同步进协议文档。这一期一并补上 ——
+   那份文档自称是契约,漏一行就是契约和实现分了叉。
+
+### 一个把自己绊倒三次的错误
+
+收尾时发现 `crates/server/tests/ws_auth.rs` **从 `db2fa97` 起就编译不过**:那一笔把
+`Config.listen` 改成了 `Option`,这个测试还在 `c.listen.to_string()`。而我一路上报的
+「全绿」全是假的 —— 因为我的判据是 `grep -c '^test result: FAILED'`,而**编译失败根本
+不产生任何 `test result:` 行**,于是它稳定地返回 0。
+
+这是同一类错误的第三次:
+
+| 次数 | 判据 | 为什么会假绿 |
+| --- | --- | --- |
+| 一 | `awk '{p+=$4; f+=$6}'` 汇总 | `FAILED` 行的字段布局与 `ok` 行不同,失败被算成 0 |
+| 二 | `cargo clippy ... | tail -1` | 管道让退出码变成 `tail` 的,永远是 0 |
+| 三 | `grep -c 'test result: FAILED'` | 编译失败一行 `test result` 都没有,计数为 0 |
+
+三次的形状是一样的:**判据在找失败的证据,而不是在要成功的证据**。缺席被当成了通过。
+
+唯一可靠的判据是**退出码**:
+
+```sh
+cargo test --workspace > /dev/null 2>&1; echo "exit=$?"
+```
+
+修好之后的真实数字:35 个测试二进制、307 个用例、退出码 0。
+
+### 「门控排在读文件之前」怎么断言
+
+这条没法直接测。反过来做:**开关关着时给一个真实存在、可读的 transcript 路径**,
+回答必须是 `reason: "disabled"`。换成任何别的 reason,都说明我们已经去碰过那个文件了。
