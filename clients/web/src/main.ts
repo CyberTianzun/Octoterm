@@ -414,10 +414,16 @@ function attachedAgent(): AgentSession | null {
 
 function syncViewToggle() {
   const btn = $("view-toggle") as HTMLButtonElement;
-  const agent = attachedAgent();
-  // 会话里没有 agent 就没有对话记录可看,按钮干脆不出现 —— 一个点了必然失败的
-  // 按钮比没有按钮更糟
-  btn.hidden = attachedId === null || agent === null;
+  // **只要 attach 了会话就显示**。
+  //
+  // 初版是「没有 agent 就藏起来」,理由是「一个点了必然失败的按钮比没有按钮更糟」——
+  // 那条推理是错的。点了会**解释原因**的按钮,和点了没反应的按钮不是一回事;而藏起来
+  // 的结果是这个功能彻底不可发现:没有入口、没有提示,用户连它存在都不知道。
+  //
+  // 服务端那套带类型的回落(disabled / no-transcript-path / unsupported-agent …)
+  // 本来就是为了「说清为什么不可用」而建的。把入口藏掉,等于让那套解释永远没机会
+  // 被看到。**回落本身就是入口的说明书。**
+  btn.hidden = attachedId === null;
   btn.textContent = viewMode === "chat" ? t("chat.backToTerminal") : t("chat.open");
 }
 
@@ -437,7 +443,12 @@ function showView() {
  */
 async function refreshChat(incremental: boolean) {
   const agent = attachedAgent();
-  if (!agent) return;
+  if (!agent) {
+    // 这个会话里没有认出任何 agent。说清楚,并给一条出路 —— 沉默会让人以为是坏了。
+    chatFallback = t("chat.fallback.noAgent");
+    renderChat();
+    return;
+  }
   const win: ChatWindow = await fetchMessages(
     token(),
     agent.agent_id,
