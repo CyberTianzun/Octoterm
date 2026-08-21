@@ -17,7 +17,7 @@
 - **不解析终端画面**。理由见下一节。
 - **不写 agent 的任何数据**。transcript 只读。
 - **不做历史检索/搜索/导出**。那是别的产品。
-- **不支持 Grok**(P1)。理由见「各家的来源」。
+- 不做 ACP 模式(见「各家的来源」末尾的补记)。
 
 ## 立论:三条腿,以及它们各自的来源
 
@@ -97,10 +97,46 @@ Block =
 | --- | --- | --- | --- |
 | Claude Code | `~/.claude/projects/<cwd-slug>/<session>.jsonl` | **hook payload 里直接给 `transcript_path`**(已实测,每个事件都有) | ✅ P1 |
 | Codex | `~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<uuid>.jsonl` | hook payload **不给**路径(codex 二进制里没有这类字段),但文件名末尾的 uuid **就是** `session_meta.id`,可由 `session_id` 确定性推导(已实测) | ✅ P1(需实测 hook payload 是否含 session_id) |
-| Grok | 未找到 | `~/.grok/memtrace/*.jsonl` 的字段是 `kind/pid/ts_ms/version`,是内存/遥测追踪,**不是对话记录**;会话内容在哪没查到 | ❌ 不进 P1 |
+| Grok | `~/.grok/sessions/<URL 编码的 cwd>/<session-uuid>/updates.jsonl` | cwd 我们知道(会话是我们 spawn 的);session-uuid 从 hook payload 取,或退而取该 cwd 下最新的目录 | ✅ P1 |
 
-**Grok 的处理方式是诚实地不支持**:检测到是 Grok 就只给终端视图,并说明原因。
-半吊子的聊天视图比没有更糟 —— 它会让人以为自己看到了全部。
+> **勘误(2026-08-21)**:本文初稿写的是「Grok 不支持,来源未找到」。**那是错的**,
+> 而且错在调研本身:`ls ~/.grok | head -8` 按字母序在 `sessions/` 之前就截断了,
+> 随后的 `find | head -6` 又恰好没返回它,于是我拿 `memtrace/*.jsonl`
+> (`kind/pid/ts_ms`,内存追踪)当成了「会话记录不存在」的证据。
+>
+> 更该记住的是:我**已经引用过** orca 文档里那句 "hook-reported Codex, Claude,
+> OpenClaude, or **Grok** transcript" —— 它明说 Grok 的 transcript 存在且由 hook 上报。
+> 引了它,又用一次浅层本地检查把它推翻,中间没察觉矛盾。**当本地证据与一份已经
+> 信到会去引用的资料冲突时,那是继续挖的信号,不是下结论的信号。**
+
+Grok 的这份流反而是三家里**最适合做聊天视图**的:
+
+```
+sessionUpdate 类型: user_message_chunk / agent_message_chunk / agent_thought_chunk
+                    tool_call / tool_call_update / turn_completed / hook_execution
+```
+
+它本来就是 ACP 的**渲染用更新流**(消息分块、思考分块、工具调用及其更新、回合边界),
+而不像 Claude 的 transcript 那样是一份 API 请求日志 —— `turn_completed` 直接给出回合
+边界,不必靠「有没有配对的 tool_result」去推。
+
+**注意别挑错文件**:同目录下的 `chat_history.jsonl` 是「发给模型的原始消息」,那里的
+`reasoning` 记录带的是 `encrypted_content`(加密的);要读的是 `updates.jsonl`,
+它的 `agent_thought_chunk` 是明文。
+
+Grok 同样支持 hook:`.grok/hooks/` 或 `~/.grok/config.toml` 里的 `[[hooks.<Event>]]`,
+`type = "command"`,事件是 pre/post-tool-use 与 session start/end,并且**同样有信任闸**
+(`/hooks-trust`,与 Codex 的 `trusted_hash` 是同一类东西 —— 装完不等于生效)。
+
+### 补记:ACP 是另一条路,本设计不走
+
+Grok 还提供 `grok agent stdio` —— JSON-RPC 跑 `session/new` / `session/prompt`,服务端推
+`session/update`。那是一条**完整的双向结构化通道**,不需要 transcript、不需要 hook、
+输入输出都是结构化的,比本文这套(transcript + hook + 写 pty)干净一个数量级。
+
+不走它的理由只有一条:**它是另一种运行模式,不是 TUI**。本设计的前提是「用户在终端里
+自己打开了 agent」,那时进程已经在 TUI 模式下跑着了。如果将来 octoterm 要做「由我来
+启动 agent」的模式,ACP 应当是第一选择。
 
 ## 主备回落(抄 orca 的一条设计)
 
@@ -186,8 +222,8 @@ octoterm 手上有三个 orca 只能靠启发式去猜的信号:
 | --- | --- |
 | **C1** | 存下 `transcript_path`;Claude adapter 的解析;`GET /api/agents/messages` + 游标 + 回落;web 端聊天视图(只读) |
 | **C2** | 发消息 + 那道闸(含补掉「去这个会话」的现存坑) |
-| **C3** | Codex adapter 的解析(先实测它的 hook payload 有没有 `session_id`) |
-| **不做** | Grok(来源未知);检索/导出 |
+| **C3** | Codex 与 Grok adapter 的解析(各自先实测 hook payload 里有没有 `session_id`) |
+| **不做** | ACP 模式(见上);检索/导出 |
 
 ## 明确不做
 
@@ -195,3 +231,4 @@ octoterm 手上有三个 orca 只能靠启发式去猜的信号:
 - 不写、不改、不缓存 agent 的 transcript。
 - 不把 agent 的原始 schema 透传到线上(R13)。
 - 不在 transcript 读不到时假装有聊天界面 —— 说清原因,回落到终端。
+- 不做 ACP 模式(那是「由 octoterm 启动 agent」的路子,与本设计的前提不同)。
