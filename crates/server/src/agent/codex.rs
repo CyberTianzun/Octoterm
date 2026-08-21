@@ -185,6 +185,9 @@ impl AgentAdapter for Codex {
             detail,
             cwd: body.get("cwd").and_then(Value::as_str).map(str::to_string),
             title: None,
+            // Codex 的 payload 里没有 transcript 路径(实测:二进制里没有这类字段)。
+            // 它的记录位置要由 session_id 推导 —— 那是 C3 的事。
+            transcript: None,
         })
     }
 

@@ -50,6 +50,12 @@ pub struct Update {
     pub detail: Option<String>,
     pub cwd: Option<String>,
     pub title: Option<String>,
+    /// agent 自己写的对话记录在哪。**每个 hook 事件都带着它**,存下来是聊天视图
+    /// 的地基(见 `transcript` 模块)。
+    ///
+    /// 原样发给客户端:它由 `cwd` + 会话 id 推导而来,而这两样客户端本来就有,
+    /// 所以没有泄漏新东西;客户端只把它当「有没有」的信号用。
+    pub transcript: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -61,6 +67,12 @@ pub struct AgentSession {
     pub detail: Option<String>,
     pub cwd: Option<String>,
     pub title: Option<String>,
+    /// agent 自己写的对话记录在哪。**每个 hook 事件都带着它**,存下来是聊天视图
+    /// 的地基(见 `transcript` 模块)。
+    ///
+    /// 原样发给客户端:它由 `cwd` + 会话 id 推导而来,而这两样客户端本来就有,
+    /// 所以没有泄漏新东西;客户端只把它当「有没有」的信号用。
+    pub transcript: Option<String>,
     /// 有值 = 正在等人回答。Task 6 接上阻塞式决策后由它填。
     pub pending: Option<String>,
     pub updated_at: u64,
@@ -224,6 +236,7 @@ impl AgentSessionStore {
             detail: None,
             cwd: None,
             title: None,
+            transcript: None,
             pending: None,
             updated_at: now(),
             acked_at: 0,
@@ -240,6 +253,9 @@ impl AgentSessionStore {
         }
         if up.title.is_some() {
             entry.title = up.title;
+        }
+        if up.transcript.is_some() {
+            entry.transcript = up.transcript;
         }
         if session.is_some() {
             entry.session = session;
@@ -443,6 +459,7 @@ mod tests {
             detail: None,
             cwd: None,
             title: None,
+            transcript: None,
             pending: None,
             updated_at,
             acked_at: 0,

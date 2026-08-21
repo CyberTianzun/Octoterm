@@ -177,6 +177,8 @@ impl AgentAdapter for ClaudeCode {
             detail,
             cwd: str_field(body, "cwd"),
             title: str_field(body, "session_title"),
+            // 每个事件都带着它。之前一直读到就扔,现在存下来 —— 聊天视图靠它。
+            transcript: str_field(body, "transcript_path"),
         })
     }
 

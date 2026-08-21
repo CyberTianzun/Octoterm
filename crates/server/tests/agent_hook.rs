@@ -205,3 +205,50 @@ async fn partial_update_does_not_clear_known_fields() {
     assert_eq!(v["sessions"][0]["cwd"], "/work/repo", "cwd 被后续事件抹掉了");
     assert_eq!(v["sessions"][0]["state"], "working");
 }
+
+/// `transcript_path` 是聊天视图的地基:每个 hook 事件都带着它,我们一直收到、
+/// 一直扔掉。存下来。
+#[tokio::test]
+async fn transcript_path_is_kept_from_the_hook_payload() {
+    let addr = server().await;
+    post_hook(
+        addr,
+        "/hook/claude-code/session-start",
+        Some(hook_token()),
+        Some("1"),
+        r#"{"session_id":"s1","transcript_path":"/home/u/.claude/projects/p/s1.jsonl"}"#,
+    )
+    .await;
+    let v = agent_sessions(addr, "tok").await;
+    assert_eq!(v["sessions"][0]["transcript"], "/home/u/.claude/projects/p/s1.jsonl");
+}
+
+/// `Update` 里的 `None` 是「这次没说」,不是「清空」。
+///
+/// 这个错在 agent 集成里犯过一次(只带 tool_name 的事件把 cwd 抹掉了),
+/// 那次是靠测试抓出来的,这里提前钉住。
+#[tokio::test]
+async fn a_later_event_without_the_path_does_not_clear_it() {
+    let addr = server().await;
+    post_hook(
+        addr,
+        "/hook/claude-code/session-start",
+        Some(hook_token()),
+        Some("1"),
+        r#"{"session_id":"s1","transcript_path":"/tmp/t.jsonl"}"#,
+    )
+    .await;
+    // PreToolUse 的 payload 里同样有 transcript_path,但这里故意不给 —— 模拟任何
+    // 不带这个字段的事件
+    post_hook(
+        addr,
+        "/hook/claude-code/pre-tool-use",
+        Some(hook_token()),
+        Some("1"),
+        r#"{"session_id":"s1","tool_name":"Bash"}"#,
+    )
+    .await;
+    let v = agent_sessions(addr, "tok").await;
+    assert_eq!(v["sessions"][0]["transcript"], "/tmp/t.jsonl", "后续事件把已知路径抹掉了");
+    assert_eq!(v["sessions"][0]["detail"], "Bash");
+}

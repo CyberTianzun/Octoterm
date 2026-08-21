@@ -14,12 +14,14 @@ use std::path::PathBuf;
 
 pub mod apply;
 pub mod claude_code;
+pub mod claude_transcript;
 pub mod codex;
 pub mod detect;
 pub mod edit;
 pub mod hook_cli;
 pub mod routes;
 pub mod store;
+pub mod transcript;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "kebab-case")]
