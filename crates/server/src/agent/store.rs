@@ -271,6 +271,18 @@ impl AgentSessionStore {
         entry.clone()
     }
 
+    /// 记下推导出来的记录路径,免得每次拉消息都重新去文件系统里找一遍。
+    pub fn set_transcript(&self, agent_id: &str, agent_session_id: &str, path: String) {
+        if let Some(s) = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get_mut(&(agent_id.to_string(), agent_session_id.to_string()))
+        {
+            s.transcript = Some(path);
+        }
+    }
+
     pub fn snapshot(&self, agent_id: &str, agent_session_id: &str) -> Option<AgentSession> {
         self.sessions
             .lock()

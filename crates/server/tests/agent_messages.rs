@@ -99,9 +99,10 @@ async fn an_unreadable_file_falls_back() {
     assert_eq!(v["reason"], "unreadable");
 }
 
-/// C1 只做 Claude。别家要说清楚是「还不支持」,不是「出错了」。
+/// Codex 的记录路径不在 hook payload 里,要由会话 id 推导。推不出来(比如这个假的
+/// 会话 id 根本没有对应文件)时要说「还没拿到路径」,而不是「这家不支持」。
 #[tokio::test]
-async fn an_agent_without_transcript_support_falls_back() {
+async fn codex_without_a_locatable_file_says_no_path() {
     let addr = server(true).await;
     reqwest::Client::new()
         .post(format!("http://{addr}/hook/codex/session-start"))
@@ -114,7 +115,7 @@ async fn an_agent_without_transcript_support_falls_back() {
         .unwrap();
     let (_, v) = messages(addr, "codex", "tok").await;
     assert_eq!(v["source"], "terminal");
-    assert_eq!(v["reason"], "unsupported-agent");
+    assert_eq!(v["reason"], "no-transcript-path");
 }
 
 #[tokio::test]

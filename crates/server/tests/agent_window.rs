@@ -123,12 +123,12 @@ fn reads_then_resumes_without_repeating_or_losing() {
     }
     f.flush().unwrap();
 
-    let w = read_window(&p, None, &parse).unwrap();
+    let w = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
     assert!(w.reset);
     assert_eq!(w.messages.len(), 3);
 
     // 没有新内容:空窗,游标不动
-    let w2 = read_window(&p, Some(&w.cursor), &parse).unwrap();
+    let w2 = read_window(&p, Some(&w.cursor), &|t, b| parse(t, b)).unwrap();
     assert!(w2.messages.is_empty());
     assert!(!w2.reset);
 
@@ -138,7 +138,7 @@ fn reads_then_resumes_without_repeating_or_losing() {
     f.write_all(line("m4", "hello 4").as_bytes()).unwrap();
     f.flush().unwrap();
 
-    let w3 = read_window(&p, Some(&w2.cursor), &parse).unwrap();
+    let w3 = read_window(&p, Some(&w2.cursor), &|t, b| parse(t, b)).unwrap();
     assert!(!w3.reset, "追加不该触发整窗替换");
     assert_eq!(w3.messages.len(), 2, "续读只该拿到新增的那两条");
     assert_eq!(w3.messages[0].id, "m3");
@@ -155,14 +155,14 @@ fn a_half_written_line_is_picked_up_on_the_next_read() {
     f.write_all(&half.as_bytes()[..20]).unwrap(); // 只写一半
     f.flush().unwrap();
 
-    let w = read_window(&p, None, &parse).unwrap();
+    let w = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
     assert_eq!(w.messages.len(), 1, "半行不该被当成一条消息");
 
     let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
     f.write_all(&half.as_bytes()[20..]).unwrap();
     f.flush().unwrap();
 
-    let w2 = read_window(&p, Some(&w.cursor), &parse).unwrap();
+    let w2 = read_window(&p, Some(&w.cursor), &|t, b| parse(t, b)).unwrap();
     assert_eq!(w2.messages.len(), 1, "补齐之后应当读到完整的那一条");
     assert_eq!(w2.messages[0].id, "m1");
 }
@@ -173,11 +173,11 @@ fn a_compacted_file_forces_a_reset() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, (0..10).map(|i| line(&format!("m{i}"), "x")).collect::<String>()).unwrap();
-    let w = read_window(&p, None, &parse).unwrap();
+    let w = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
     assert_eq!(w.messages.len(), 10);
 
     std::fs::write(&p, line("n0", "after compact")).unwrap();
-    let w2 = read_window(&p, Some(&w.cursor), &parse).unwrap();
+    let w2 = read_window(&p, Some(&w.cursor), &|t, b| parse(t, b)).unwrap();
     assert!(w2.reset, "文件变小了却当成追加");
     assert_eq!(w2.messages.len(), 1);
     assert_eq!(w2.messages[0].id, "n0");
@@ -188,11 +188,11 @@ fn cursor_round_trips_and_rejects_garbage() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, line("m0", "x")).unwrap();
-    let w = read_window(&p, None, &parse).unwrap();
+    let w = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
     assert!(decode_cursor(&w.cursor).is_some());
     assert!(decode_cursor("garbage").is_none());
     // 坏游标当成没有游标 —— 整窗重来,而不是报错
-    let w2 = read_window(&p, Some("garbage"), &parse).unwrap();
+    let w2 = read_window(&p, Some("garbage"), &|t, b| parse(t, b)).unwrap();
     assert!(w2.reset);
 }
 
@@ -204,10 +204,13 @@ fn a_reset_window_is_capped_by_bytes_not_just_by_count() {
     use octoterm_server::agent::transcript::{clamp_for_reset, MAX_BLOCK_BYTES, MAX_RESPONSE_BYTES};
     let fat: Vec<_> = (0..100)
         .map(|i| {
-            parse(&format!(
-                r#"{{"type":"assistant","uuid":"m{i}","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}}}}"#,
-                "x".repeat(MAX_BLOCK_BYTES - 1)
-            ))
+            parse(
+                &format!(
+                    r#"{{"type":"assistant","uuid":"m{i}","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}}}}"#,
+                    "x".repeat(MAX_BLOCK_BYTES - 1)
+                ),
+                0,
+            )
             .remove(0)
         })
         .collect();
@@ -231,7 +234,7 @@ fn an_overlong_line_never_stalls_the_cursor() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, line("m0", "short")).unwrap();
-    let first = read_window(&p, None, &parse).unwrap();
+    let first = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
 
     // 追加一条远超增量上限的单行
     let huge = format!(
@@ -242,7 +245,7 @@ fn an_overlong_line_never_stalls_the_cursor() {
     f.write_all(huge.as_bytes()).unwrap();
     f.flush().unwrap();
 
-    let w = read_window(&p, Some(&first.cursor), &parse).unwrap();
+    let w = read_window(&p, Some(&first.cursor), &|t, b| parse(t, b)).unwrap();
     assert_ne!(w.cursor, first.cursor, "游标原地不动 —— 客户端会在这里无限循环");
     assert_eq!(w.messages.len(), 1, "扩窗之后这条超长记录仍应当被完整读到");
 }
@@ -254,13 +257,13 @@ fn a_line_longer_than_the_window_is_skipped_not_stalled() {
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("t.jsonl");
     std::fs::write(&p, line("m0", "short")).unwrap();
-    let first = read_window(&p, None, &parse).unwrap();
+    let first = read_window(&p, None, &|t, b| parse(t, b)).unwrap();
 
     let mut f = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
     f.write_all(&vec![b'x'; WINDOW_BYTES as usize + 1000]).unwrap();
     f.write_all(b"\n").unwrap();
     f.flush().unwrap();
 
-    let w = read_window(&p, Some(&first.cursor), &parse).unwrap();
+    let w = read_window(&p, Some(&first.cursor), &|t, b| parse(t, b)).unwrap();
     assert_ne!(w.cursor, first.cursor, "游标必须前进,哪怕代价是丢掉这一条");
 }

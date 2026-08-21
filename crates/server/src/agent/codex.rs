@@ -168,6 +168,22 @@ impl AgentAdapter for Codex {
             .collect())
     }
 
+    fn supports_transcript(&self) -> bool {
+        true
+    }
+
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<super::transcript::Message> {
+        super::codex_transcript::parse(text, base_offset)
+    }
+
+    fn locate_transcript(
+        &self,
+        home: &std::path::Path,
+        agent_session_id: &str,
+    ) -> Option<std::path::PathBuf> {
+        super::codex_transcript::locate(home, agent_session_id)
+    }
+
     fn activation(&self) -> Option<&'static str> {
         Some("codex-hooks-review")
     }

@@ -16,6 +16,7 @@ pub mod apply;
 pub mod claude_code;
 pub mod claude_transcript;
 pub mod codex;
+pub mod codex_transcript;
 pub mod detect;
 pub mod edit;
 pub mod hook_cli;
@@ -107,9 +108,16 @@ pub trait AgentAdapter: Send + Sync {
         false
     }
 
+    /// 记录文件在哪。有些 agent 在 hook payload 里直接给(Claude),有些得自己推
+    /// (Codex 的文件名里含会话 id)。`None` = 推不出来。
+    fn locate_transcript(&self, home: &std::path::Path, agent_session_id: &str) -> Option<PathBuf> {
+        let _ = (home, agent_session_id);
+        None
+    }
+
     /// 把这家的对话记录解析成归一化消息。只在 [`Self::supports_transcript`] 为真时调用。
-    fn parse_transcript(&self, text: &str) -> Vec<transcript::Message> {
-        let _ = text;
+    fn parse_transcript(&self, text: &str, base_offset: u64) -> Vec<transcript::Message> {
+        let _ = (text, base_offset);
         Vec::new()
     }
 

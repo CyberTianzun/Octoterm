@@ -1,7 +1,7 @@
 # octoterm 聊天视图设计
 
 日期:2026-08-21
-状态:C1 已实施(只读);C2 发消息、C3 Codex 与 Grok 待做
+状态:C1(只读)与 C3 的 Codex 部分已实施;C2 发消息、C3 的 Grok 部分待做
 
 ## 目标
 
@@ -96,7 +96,7 @@ Block =
 | agent | 位置 | 怎么定位 | 状态 |
 | --- | --- | --- | --- |
 | Claude Code | `~/.claude/projects/<cwd-slug>/<session>.jsonl` | **hook payload 里直接给 `transcript_path`**(已实测,每个事件都有) | ✅ P1 |
-| Codex | `~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<uuid>.jsonl` | hook payload **不给**路径(codex 二进制里没有这类字段),但文件名末尾的 uuid **就是** `session_meta.id`,可由 `session_id` 确定性推导(已实测) | ✅ P1(需实测 hook payload 是否含 session_id) |
+| Codex | `~/.codex/sessions/<Y>/<M>/<D>/rollout-<ts>-<uuid>.jsonl` | hook payload **不给**路径,但文件名末尾的 uuid **就是** `session_meta.id`,由 `session_id` 确定性推导 | ✅ **已实施** |
 | Grok | `~/.grok/sessions/<URL 编码的 cwd>/<session-uuid>/updates.jsonl` | cwd 我们知道(会话是我们 spawn 的);session-uuid 从 hook payload 取,或退而取该 cwd 下最新的目录 | ✅ P1 |
 
 > **勘误(2026-08-21)**:本文初稿写的是「Grok 不支持,来源未找到」。**那是错的**,

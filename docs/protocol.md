@@ -36,7 +36,7 @@ scope:         everything on the wire between a client and octoterm-server
 | side-channel integration tests | `crates/server/tests/http_launchers.rs` |
 | agent integration (server side) | `crates/server/src/agent/` |
 | agent integration tests | `crates/server/tests/agent_{detect,edit,install,hook,pending,codex}.rs` |
-| chat view (transcript reading) | `crates/server/src/agent/{transcript,claude_transcript}.rs` |
+| chat view (transcript reading) | `crates/server/src/agent/{transcript,claude_transcript,codex_transcript}.rs` |
 | chat view tests | `crates/server/tests/agent_{transcript,window,messages}.rs` |
 
 ## 2. Transport [T]

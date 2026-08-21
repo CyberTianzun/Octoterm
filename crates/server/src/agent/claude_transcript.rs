@@ -16,11 +16,19 @@ use serde_json::Value;
 
 use super::transcript::{clamp_text, flatten_tool_input, Block, Message, Role};
 
-pub fn parse(text: &str) -> Vec<Message> {
-    text.lines().filter_map(parse_line).collect()
+pub fn parse(text: &str, base: u64) -> Vec<Message> {
+    let mut at = base;
+    let mut out = Vec::new();
+    for line in text.split_inclusive('\n') {
+        if let Some(m) = parse_line(line, at) {
+            out.push(m);
+        }
+        at += line.len() as u64;
+    }
+    out
 }
 
-fn parse_line(line: &str) -> Option<Message> {
+fn parse_line(line: &str, at: u64) -> Option<Message> {
     let line = line.trim();
     if line.is_empty() {
         return None;
@@ -47,7 +55,7 @@ fn parse_line(line: &str) -> Option<Message> {
     }
 
     Some(Message {
-        id: message_id(&row, &blocks),
+        id: message_id(&row, at),
         role,
         ts: row.get("timestamp").and_then(Value::as_str).and_then(parse_ts),
         blocks,
@@ -90,8 +98,8 @@ fn result_text(v: Option<&Value>) -> String {
     }
 }
 
-/// 稳定 id。优先用记录自带的 `uuid`;没有就按**内容**哈希 —— 绝不用读取序号。
-fn message_id(row: &Value, blocks: &[Block]) -> String {
+/// 稳定 id。优先用记录自带的 `uuid`;没有就用这一行的字节偏移(见 `transcript::offset_id`)。
+fn message_id(row: &Value, at: u64) -> String {
     for key in ["uuid", "id"] {
         if let Some(v) = row.get(key).and_then(Value::as_str) {
             return v.to_string();
@@ -100,14 +108,7 @@ fn message_id(row: &Value, blocks: &[Block]) -> String {
     if let Some(v) = row.get("message").and_then(|m| m.get("id")).and_then(Value::as_str) {
         return v.to_string();
     }
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in blocks {
-        for byte in serde_json::to_string(b).unwrap_or_default().bytes() {
-            h ^= byte as u64;
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-    format!("h{h:016x}")
+    super::transcript::offset_id(at)
 }
 
 /// ISO 8601 → unix 秒。**不引入日期库**:只认 `YYYY-MM-DDTHH:MM:SS` 这个前缀,

@@ -10,7 +10,7 @@ use octoterm_server::agent::transcript::{Block, Role, MAX_BLOCK_BYTES};
 const FIXTURE: &str = include_str!("fixtures/claude-transcript.jsonl");
 
 fn parsed() -> Vec<octoterm_server::agent::transcript::Message> {
-    parse(FIXTURE)
+    parse(FIXTURE, 0)
 }
 
 #[test]
@@ -77,7 +77,7 @@ fn ids_are_stable_across_two_reads() {
     assert_eq!(a, b);
     // 从中间某行开始的窗口,重叠部分的 id 必须和整份读出来的一致
     let half = FIXTURE.lines().skip(FIXTURE.lines().count() / 2).collect::<Vec<_>>().join("\n");
-    let tail: Vec<_> = parse(&half).into_iter().map(|m| m.id).collect();
+    let tail: Vec<_> = parse(&half, 0).into_iter().map(|m| m.id).collect();
     assert!(tail.iter().all(|id| a.contains(id)), "换个窗口起点,id 就变了");
 }
 
@@ -87,7 +87,7 @@ fn oversized_block_is_truncated_and_marked() {
         r#"{{"type":"assistant","uuid":"big","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}}}}"#,
         "x".repeat(MAX_BLOCK_BYTES * 2)
     );
-    let m = parse(&huge);
+    let m = parse(&huge, 0);
     assert_eq!(m.len(), 1);
     match &m[0].blocks[0] {
         Block::Text { text } => {
@@ -101,7 +101,7 @@ fn oversized_block_is_truncated_and_marked() {
 #[test]
 fn tool_result_error_is_marked() {
     let line = r#"{"type":"user","uuid":"e1","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"boom","is_error":true}]}}"#;
-    match &parse(line)[0].blocks[0] {
+    match &parse(line, 0)[0].blocks[0] {
         Block::ToolResult { ok, .. } => assert!(!ok, "报错的工具结果没被标出来"),
         other => panic!("形状不对: {other:?}"),
     }
@@ -111,7 +111,7 @@ fn tool_result_error_is_marked() {
 #[test]
 fn plain_string_content_becomes_a_text_block() {
     let line = r#"{"type":"user","uuid":"p1","message":{"role":"user","content":"你好"}}"#;
-    match &parse(line)[0].blocks[0] {
+    match &parse(line, 0)[0].blocks[0] {
         Block::Text { text } => assert_eq!(text, "你好"),
         other => panic!("形状不对: {other:?}"),
     }

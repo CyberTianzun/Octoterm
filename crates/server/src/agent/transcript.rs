@@ -183,7 +183,7 @@ pub fn decode_cursor(s: &str) -> Option<(u64, u64)> {
 pub fn read_window(
     path: &std::path::Path,
     cursor: Option<&str>,
-    parse: &dyn Fn(&str) -> Vec<Message>,
+    parse: &dyn Fn(&str, u64) -> Vec<Message>,
 ) -> std::io::Result<Window> {
     use std::io::{Read, Seek, SeekFrom};
 
@@ -242,7 +242,9 @@ pub fn read_window(
     let body = &buf[..body_len];
     // 记录里可能混进非法字节(截断的多字节字符),不能让它把整次读取变成错误
     let text = String::from_utf8_lossy(body);
-    let mut messages = parse(&text);
+    // body 的第一个字节在文件里的绝对位置 —— 解析器用它给每一行算稳定 id
+    let base = plan.start + consumed - body_len as u64;
+    let mut messages = parse(&text, base);
 
     // 上界**只作用于首次加载**:那时保留最近的即可。增量不能丢头(会静默丢消息),
     // 它靠 INCREMENT_BYTES + `more` 来限量。
@@ -256,6 +258,22 @@ pub fn read_window(
         reset: plan.reset,
         more: plan.more,
     })
+}
+
+/// 拿不到 agent 自己的 id 时,用**这一行在文件里的字节偏移**当 id。
+///
+/// 一开始用的是内容哈希,错了:Codex 的记录里重复内容很常见(同一个 wait 调用、
+/// 一样的短输出),哈希会撞,而客户端按 id 去重 —— 撞了就会把不同的消息当成重复丢掉。
+/// 拿真实数据一跑就露馅了,合成 fixture 里每条都不同,测不出来。
+///
+/// 偏移同时满足两个要求:**唯一**(一行一个位置),而且**稳定** —— 文件只追加,
+/// 同一行的偏移永远不变,换个窗口起点读到的还是同一个。绝不能用「窗口内的序号」,
+/// 那个会跟着窗口起点变。
+///
+/// 文件被 compact 之后偏移的含义变了,但那时服务端会判游标失效、整窗重发(`reset`),
+/// 客户端整段替换,不存在新旧 id 混在一起的情况。
+pub fn offset_id(absolute_offset: u64) -> String {
+    format!("@{absolute_offset:x}")
 }
 
 /// 单个块的文本上界。一次 `cat` 的输出可以是几 MB,聊天视图不需要那么多。

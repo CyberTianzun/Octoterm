@@ -452,8 +452,28 @@ pub async fn messages(
     if !adapter.supports_transcript() {
         return fell_back("unsupported-agent");
     }
-    let Some(path) = session.transcript else {
-        return fell_back("no-transcript-path");
+    // Claude 的 hook 直接给路径;Codex 不给,但文件名里含会话 id,可以确定性推出来。
+    // 推到了就记下来,免得每次增量拉取都重新走一遍文件系统。
+    let path = match session.transcript {
+        Some(p) => p,
+        None => {
+            let home = DetectEnv::current().home;
+            let (aid, sid) = (q.agent_id.clone(), q.agent_session_id.clone());
+            let found = tokio::task::spawn_blocking(move || {
+                crate::agent::find(&aid).and_then(|a| a.locate_transcript(&home, &sid))
+            })
+            .await
+            .ok()
+            .flatten();
+            match found {
+                Some(p) => {
+                    let s = p.to_string_lossy().to_string();
+                    state.agent_sessions.set_transcript(&q.agent_id, &q.agent_session_id, s.clone());
+                    s
+                }
+                None => return fell_back("no-transcript-path"),
+            }
+        }
     };
 
     // 读文件是阻塞 IO
@@ -462,7 +482,7 @@ pub async fn messages(
         crate::agent::transcript::read_window(
             std::path::Path::new(&path),
             after.as_deref(),
-            &|text| adapter.parse_transcript(text),
+            &|text, base| adapter.parse_transcript(text, base),
         )
     });
     match job.await {

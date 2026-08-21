@@ -1,0 +1,85 @@
+{"type": "session_meta", "payload": {"session_id": "<uuid>", "id": "<uuid>", "cwd": "/work/repo", "cli_version": "0.147.0"}}
+{"type": "event_msg", "payload": {"type": "task_started", "note": "<skipped>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<msg-1>"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<msg-2>"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<msg-3>"}]}}
+{"type": "response_item", "payload": {"type": "reasoning", "id": "r1", "summary": [], "encrypted_content": "<ENCRYPTED-should-be-skipped>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-4>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-1>\"}", "call_id": "call_1"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_1", "output": "<out-1>"}}
+{"type": "event_msg", "payload": {"type": "token_count", "note": "<skipped>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-5>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-2>\"}", "call_id": "call_2"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_2", "output": "<out-2>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-1>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-6>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-3>\"}", "call_id": "call_3"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_3", "output": "<out-3>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-2>"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "update_plan", "arguments": "{\"command\": \"<cmd-4>\"}", "call_id": "call_4"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_4", "output": "<out-4>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-7>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-5>\"}", "call_id": "call_5"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-6>\"}", "call_id": "call_6"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-7>\"}", "call_id": "call_7"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-8>\"}", "call_id": "call_8"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_5", "output": "<out-5>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_6", "output": "<out-6>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_7", "output": "<out-7>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_8", "output": "<out-8>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-3>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-8>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-9>\"}", "call_id": "call_9"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-10>\"}", "call_id": "call_10"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-11>\"}", "call_id": "call_11"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-12>\"}", "call_id": "call_12"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_9", "output": "<out-9>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_10", "output": "<out-10>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_11", "output": "<out-11>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_12", "output": "<out-12>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-9>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-13>\"}", "call_id": "call_13"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-14>\"}", "call_id": "call_14"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-15>\"}", "call_id": "call_15"}}
+{ broken codex line
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-16>\"}", "call_id": "call_16"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_13", "output": "<out-13>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_14", "output": "<out-14>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_15", "output": "<out-15>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_16", "output": "<out-16>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-4>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-5>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-6>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-7>"}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-8>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-10>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-17>\"}", "call_id": "call_17"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-18>\"}", "call_id": "call_18"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-19>\"}", "call_id": "call_19"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-20>\"}", "call_id": "call_20"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_17", "output": "<out-17>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_18", "output": "<out-18>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_19", "output": "<out-19>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_20", "output": "<out-20>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-11>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-21>\"}", "call_id": "call_21"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-22>\"}", "call_id": "call_22"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-23>\"}", "call_id": "call_23"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "arguments": "{\"command\": \"<cmd-24>\"}", "call_id": "call_24"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_21", "output": "<out-21>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_22", "output": "<out-22>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_23", "output": "<out-23>"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_24", "output": "<out-24>"}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "update_plan", "arguments": "{\"command\": \"<cmd-25>\"}", "call_id": "call_25"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_25", "output": "<out-25>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-12>"}]}}
+{"type": "response_item", "payload": {"type": "function_call", "name": "update_plan", "arguments": "{\"command\": \"<cmd-26>\"}", "call_id": "call_26"}}
+{"type": "response_item", "payload": {"type": "function_call_output", "call_id": "call_26", "output": "<out-26>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-13>"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "developer", "content": [{"type": "input_text", "text": "<msg-14>"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<msg-15>"}]}}
+{"type": "response_item", "payload": {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "<msg-16>"}]}}
+{"type": "event_msg", "payload": {"type": "agent_reasoning", "text": "<thinking-9>"}}
+{"type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "input_text", "text": "<msg-17>"}]}}
+{"type": "response_item", "payload": {"type": "custom_tool_call", "name": "exec", "input": "<input-1>", "call_id": "ccall_1", "status": "completed"}}
+{"type": "response_item", "payload": {"type": "custom_tool_call_output", "call_id": "ccall_1", "output": [{"type": "output_text", "text": "<cout-1>"}]}}
