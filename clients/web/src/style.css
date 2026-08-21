@@ -556,3 +556,71 @@ button:hover { border-color: var(--accent); color: var(--accent); }
 }
 
 .achoice-kind { font-size: 12px; opacity: 0.85; margin: 4px 0 6px; }
+
+/* ---------- 聊天视图 ---------- */
+
+#chat-view {
+  padding: 14px 18px;
+  overflow-y: auto;
+  height: 100%;
+  box-sizing: border-box;
+  font-size: 13px;
+  line-height: 1.55;
+}
+#view-toggle { margin-left: 6px; padding: 2px 10px; }
+
+.cmsg {
+  border-left: 3px solid transparent;
+  padding: 6px 0 6px 10px;
+  margin-bottom: 10px;
+}
+/* 用左边框区分角色而不是气泡:一条消息里可能有正文 + 思考 + 好几个工具调用,
+   气泡会把它们割裂开,而它们本来就属于同一次发言 */
+.c-user { border-left-color: #4ea1ff; }
+.c-assistant { border-left-color: rgba(128, 128, 128, 0.5); }
+.c-system { border-left-color: #9a8cff; opacity: 0.8; }
+
+.cb-text { white-space: pre-wrap; word-break: break-word; }
+
+/* 思考默认折叠,但不隐藏 —— 用户要能一眼看到「有」,再自己决定展不展开 */
+.cb-thinking { margin: 6px 0; opacity: 0.8; }
+.cb-thinking > summary { cursor: pointer; font-size: 12px; }
+.cb-thinking > div { white-space: pre-wrap; margin-top: 4px; padding-left: 12px; }
+
+.cb-tool {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin: 4px 0;
+  font-size: 12px;
+}
+.cb-tool-name { font-weight: 600; flex: none; }
+.cb-tool code {
+  overflow-x: auto;
+  white-space: pre;
+  opacity: 0.85;
+}
+
+.cb-result { margin: 4px 0; }
+.cb-result pre {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 12em;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: rgba(128, 128, 128, 0.12);
+  border-radius: 4px;
+  font-size: 12px;
+}
+.cb-result.is-error pre { background: rgba(255, 107, 107, 0.15); }
+.cb-result-tag { font-size: 11px; color: #ff6b6b; margin-right: 6px; }
+
+/* 回落:说清原因 + 给一条出路,绝不画一个空聊天框 */
+.chat-fallback {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 24px;
+  opacity: 0.85;
+}

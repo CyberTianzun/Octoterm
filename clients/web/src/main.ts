@@ -16,6 +16,13 @@ import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
 import {
+  type ChatWindow,
+  type Message as ChatMessage,
+  fallbackText,
+  fetchMessages,
+  mergeWindow,
+} from "./chat";
+import {
   type AgentMap,
   type AgentSession,
   type PendingDetail,
@@ -51,6 +58,15 @@ const pendingDetails = new Map<string, PendingDetail>();
 /** 倒计时的刷新句柄。重绘时先清掉,免得叠出多个。 */
 let countdownTimer: ReturnType<typeof setInterval> | null = null;
 const BASE_TITLE = document.title;
+
+/* ---------- 聊天视图 ---------- */
+
+/** 当前会话用哪种方式看。**默认终端** —— C1 只读,把聊天设成默认会让人以为坏了。 */
+let viewMode: "terminal" | "chat" = "terminal";
+let chatMessages: ChatMessage[] = [];
+let chatCursor: string | null = null;
+/** 读不到对话记录时的原因(已经翻成人话)。有值就说明这次该显示回落。 */
+let chatFallback: string | null = null;
 
 let config: OctoConfig = loadConfig(resolveTheme);
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
@@ -259,6 +275,11 @@ function openTerminal(id: number) {
     disposeTerminal();
   }
   attachedId = id;
+  // 换了会话,上一份对话记录与这一份无关
+  chatMessages = [];
+  chatCursor = null;
+  chatFallback = null;
+  viewMode = "terminal";
   $("session-list").hidden = true;
   $("back-to-list").hidden = false;
   $("terminal-wrap").hidden = false;
@@ -273,6 +294,7 @@ function openTerminal(id: number) {
   client.attach(id, TERM_CHANNEL, want?.cols ?? term.cols, want?.rows ?? term.rows);
   term.focus();
   renderSidebar();
+  syncViewToggle();
 }
 
 /**
@@ -307,6 +329,8 @@ function closeTerminal() {
   if (attachedId !== null) client.detach(TERM_CHANNEL);
   attachedId = null;
   disposeTerminal();
+  $("chat-view").hidden = true;
+  $("view-toggle").hidden = true;
   $("terminal-wrap").hidden = true;
   $("session-list").hidden = false;
   $("back-to-list").hidden = true;
@@ -337,6 +361,12 @@ $("menu").addEventListener("click", () => setDrawer(true));
 //
 // 顺手关掉抽屉:窄屏上侧边栏是盖在工作区上的浮层,不关掉的话点完这个按钮,
 // 身后那张列表页恰好被挡住,看起来像什么都没发生。
+$("view-toggle").addEventListener("click", () => {
+  viewMode = viewMode === "chat" ? "terminal" : "chat";
+  showView();
+  // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
+  if (viewMode === "chat") void refreshChat(false);
+});
 $("back-to-list").addEventListener("click", () => {
   setDrawer(false);
   closeTerminal();
@@ -377,6 +407,127 @@ client.onFatal = (message) => {
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
+/** 当前 attach 的会话上绑着哪个 agent 会话。没有就不提供聊天视图。 */
+function attachedAgent(): AgentSession | null {
+  return attachedId === null ? null : forSession(agents, attachedId);
+}
+
+function syncViewToggle() {
+  const btn = $("view-toggle") as HTMLButtonElement;
+  const agent = attachedAgent();
+  // 会话里没有 agent 就没有对话记录可看,按钮干脆不出现 —— 一个点了必然失败的
+  // 按钮比没有按钮更糟
+  btn.hidden = attachedId === null || agent === null;
+  btn.textContent = viewMode === "chat" ? t("chat.backToTerminal") : t("chat.open");
+}
+
+function showView() {
+  const chatting = viewMode === "chat" && attachedId !== null;
+  $("chat-view").hidden = !chatting;
+  $("terminal-wrap").hidden = chatting || attachedId === null;
+  syncViewToggle();
+  // 从聊天切回终端时终端刚从 hidden 变回可见,尺寸要重新量一次并上报
+  if (!chatting && attachedId !== null) refit();
+}
+
+/**
+ * 拉一次消息。`incremental` 为真时带上游标。
+ *
+ * 服务端说 `more` 就立刻再拉一次 —— 那表示这次是被字节上限截断的,不是没有了。
+ */
+async function refreshChat(incremental: boolean) {
+  const agent = attachedAgent();
+  if (!agent) return;
+  const win: ChatWindow = await fetchMessages(
+    token(),
+    agent.agent_id,
+    agent.agent_session_id,
+    incremental ? (chatCursor ?? undefined) : undefined,
+  );
+  if (win.source !== "transcript") {
+    chatFallback = fallbackText(win.reason);
+    renderChat();
+    return;
+  }
+  chatFallback = null;
+  chatMessages = mergeWindow(incremental ? chatMessages : [], win);
+  chatCursor = win.cursor;
+  renderChat();
+  if (win.more) void refreshChat(true);
+}
+
+function blockNode(b: ChatMessage["blocks"][number]): HTMLElement {
+  const el = document.createElement("div");
+  if (b.kind === "text") {
+    el.className = "cb-text";
+    el.textContent = b.text;
+  } else if (b.kind === "thinking") {
+    // 思考过程常常比正文还长,默认折叠 —— 但**不隐藏**:它是这类 agent 最有信息量
+    // 的部分之一,用户要能一眼看到「有」并自己展开
+    const d = document.createElement("details");
+    d.className = "cb-thinking";
+    const sum = document.createElement("summary");
+    sum.textContent = t("chat.thinking");
+    const body = document.createElement("div");
+    body.textContent = b.text;
+    d.append(sum, body);
+    return d;
+  } else if (b.kind === "tool-use") {
+    el.className = "cb-tool";
+    const name = document.createElement("span");
+    name.className = "cb-tool-name";
+    name.textContent = b.name;
+    const input = document.createElement("code");
+    input.textContent = b.input;
+    el.append(name, input);
+  } else {
+    el.className = "cb-result" + (b.ok ? "" : " is-error");
+    if (!b.ok) {
+      const tag = document.createElement("span");
+      tag.className = "cb-result-tag";
+      tag.textContent = t("chat.toolResultError");
+      el.appendChild(tag);
+    }
+    const pre = document.createElement("pre");
+    pre.textContent = b.text;
+    el.appendChild(pre);
+  }
+  return el;
+}
+
+function renderChat() {
+  const box = $("chat-view");
+  box.innerHTML = "";
+  if (chatFallback) {
+    const wrap = document.createElement("div");
+    wrap.className = "chat-fallback";
+    const why = document.createElement("div");
+    why.textContent = chatFallback;
+    const go = document.createElement("button");
+    go.textContent = t("chat.openTerminalInstead");
+    go.addEventListener("click", () => {
+      viewMode = "terminal";
+      showView();
+    });
+    wrap.append(why, go);
+    box.appendChild(wrap);
+    return;
+  }
+  if (chatMessages.length === 0) {
+    box.innerHTML = `<div class="empty">${t("chat.empty")}</div>`;
+    return;
+  }
+  // 贴着底部时才自动跟随;用户往上翻看历史时不该被拽回来
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  for (const m of chatMessages) {
+    const row = document.createElement("div");
+    row.className = `cmsg c-${m.role}`;
+    for (const b of m.blocks) row.appendChild(blockNode(b));
+    box.appendChild(row);
+  }
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+
 /** 状态胶囊。列表页和侧边栏共用同一个,保证两处看到的是一回事。 */
 function agentBadge(a: AgentSession): HTMLElement {
   const pill = document.createElement("span");
@@ -732,6 +883,11 @@ client.onControl = (msg) => {
       renderSidebar();
       renderSessionList();
       renderAgentBanner();
+      syncViewToggle();
+      // 有事件才可能有新消息 —— 所以不做轮询
+      if (viewMode === "chat" && (msg as AgentSession).session === attachedId) {
+        void refreshChat(true);
+      }
       void refreshPendingDetails();
       break;
     case "preview-data": {
