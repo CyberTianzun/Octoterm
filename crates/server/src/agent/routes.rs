@@ -12,7 +12,7 @@ use axum::Json;
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, Path};
+use axum::extract::{ConnectInfo, Path, Query};
 
 use crate::agent::apply::{apply, default_backup_dir, ApplyError, ApplyOpts};
 use crate::agent::detect::DetectEnv;
@@ -405,6 +405,80 @@ pub async fn answer(
         // 重复提交与「请求不存在」对客户端是两件事,不能混成同一个码
         AnswerResult::AlreadyAnswered => {
             (StatusCode::CONFLICT, "already answered").into_response()
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct MessagesQuery {
+    pub agent_id: String,
+    pub agent_session_id: String,
+    /// 上次的游标,不透明串,原样带回来。缺省 = 首次加载,取最近的一窗。
+    #[serde(default)]
+    pub after: Option<String>,
+}
+
+/// 回落的原因。**必须是带类型的**,不能只回一个空列表。
+///
+/// 抄的是 orca 的 `source` + `fallbackReason`,而且是抄它的教训:他们有个 bug 就是
+/// 这条没兜住 —— Windows 上 Codex 会话「聊天界面渲染出一个空 transcript」。
+/// 空聊天框比说清原因更糟:用户会以为对话真的是空的,而不是「这里读不到」。
+fn fell_back(reason: &str) -> Response {
+    Json(serde_json::json!({ "source": "terminal", "reason": reason })).into_response()
+}
+
+/// `GET /api/agents/messages` —— 聊天视图的消息流。
+///
+/// 走 HTTP 不走控制通道:一段对话可以是几 MB,协议 R4 明令不许在控制通道走大块数据。
+/// 增量由客户端在收到 `agent-event` 时带着游标来拉,不需要新的推送机制。
+pub async fn messages(
+    State(state): State<AppState>,
+    Query(q): Query<MessagesQuery>,
+    headers: HeaderMap,
+) -> Response {
+    if !bearer_ok(&headers, &state.token) {
+        return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    // 门控排在**一切之前**:关着的时候一个字节都不该读
+    if !state.agents.transcript_enabled {
+        return fell_back("disabled");
+    }
+    let Some(session) = state.agent_sessions.snapshot(&q.agent_id, &q.agent_session_id) else {
+        return (StatusCode::NOT_FOUND, "no such agent session").into_response();
+    };
+    let Some(adapter) = crate::agent::find(&q.agent_id) else {
+        return (StatusCode::NOT_FOUND, "no such agent").into_response();
+    };
+    if !adapter.supports_transcript() {
+        return fell_back("unsupported-agent");
+    }
+    let Some(path) = session.transcript else {
+        return fell_back("no-transcript-path");
+    };
+
+    // 读文件是阻塞 IO
+    let after = q.after.clone();
+    let job = tokio::task::spawn_blocking(move || {
+        crate::agent::transcript::read_window(
+            std::path::Path::new(&path),
+            after.as_deref(),
+            &|text| adapter.parse_transcript(text),
+        )
+    });
+    match job.await {
+        Ok(Ok(window)) => {
+            let mut v = serde_json::to_value(&window).unwrap_or_default();
+            v["source"] = serde_json::json!("transcript");
+            Json(v).into_response()
+        }
+        // 文件没了、权限不足、正好被换掉 —— 都不是错误,是「这次读不到」
+        Ok(Err(e)) => {
+            tracing::debug!(error = %e, "读 transcript 失败,回落到终端");
+            fell_back("unreadable")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "读 transcript 的任务失败");
+            fell_back("unreadable")
         }
     }
 }

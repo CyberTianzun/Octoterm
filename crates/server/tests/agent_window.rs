@@ -195,3 +195,27 @@ fn cursor_round_trips_and_rejects_garbage() {
     let w2 = read_window(&p, Some("garbage"), &parse).unwrap();
     assert!(w2.reset);
 }
+
+/// 条数上界挡不住字节数:200 条里每条都塞满大块,序列化出来能有好几 MB。
+/// 这个缺口是拿一份真实的 10 MB 记录量出来的 —— 那次碰巧是 164 KiB,
+/// 而「碰巧在范围内」不是限额。
+#[test]
+fn a_reset_window_is_capped_by_bytes_not_just_by_count() {
+    use octoterm_server::agent::transcript::{clamp_for_reset, MAX_BLOCK_BYTES, MAX_RESPONSE_BYTES};
+    let fat: Vec<_> = (0..100)
+        .map(|i| {
+            parse(&format!(
+                r#"{{"type":"assistant","uuid":"m{i}","message":{{"role":"assistant","content":[{{"type":"text","text":"{}"}}]}}}}"#,
+                "x".repeat(MAX_BLOCK_BYTES - 1)
+            ))
+            .remove(0)
+        })
+        .collect();
+    assert!(fat.len() <= 200, "先确认条数本来就没超");
+    let out = clamp_for_reset(fat);
+    let size = serde_json::to_string(&out).unwrap().len();
+    assert!(size <= MAX_RESPONSE_BYTES, "裁完还有 {size} 字节");
+    assert!(!out.is_empty(), "不能裁成空的");
+    // 丢的必须是最旧的一头 —— 首屏要的是最近发生的事
+    assert_eq!(out.last().unwrap().id, "m99");
+}

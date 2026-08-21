@@ -75,6 +75,13 @@ pub struct AgentsConfig {
     pub session_stale_secs: u64,
     #[serde(default = "default_working_stale")]
     pub working_stale_secs: u64,
+    /// 把**整段对话**送上网。
+    ///
+    /// 默认关,而且是和 `install_enabled` **分开**的一个决定:装 hook 让我们看到
+    /// 「它在干什么」,这个开关让我们看到「它说了什么」—— 后者是代码、路径、命令、
+    /// 模型的思考过程,暴露面高一个数量级,不该靠前者顺带同意。
+    #[serde(default)]
+    pub transcript_enabled: bool,
     /// 一个挂起请求最多等多久。
     ///
     /// 必须**小于**写进 hook 里的 `timeout`(600 秒),这样超时是我们主动写一个
@@ -103,6 +110,7 @@ impl Default for AgentsConfig {
             session_stale_secs: default_session_stale(),
             working_stale_secs: default_working_stale(),
             pending_timeout_secs: default_pending_timeout(),
+            transcript_enabled: false,
         }
     }
 }

@@ -70,6 +70,34 @@ pub const INCREMENT_BYTES: u64 = 256 * 1024;
 /// 增量不受它约束,理由见 `INCREMENT_BYTES`。
 pub const MAX_MESSAGES: usize = 200;
 
+/// 单次响应的字节上界。
+///
+/// 条数上界挡不住这个:200 条里每条都塞满 8 KiB 的块,序列化出来能有好几 MB。
+/// 这个缺口是拿一份真实的 10 MB 记录量出来的 —— 那次碰巧是 164 KiB,而「碰巧在
+/// 范围内」不是限额。
+///
+/// 同样**只作用于首次加载**:从最旧的一头开始丢(首屏要的是最近的)。增量不能丢,
+/// 它由 `INCREMENT_BYTES` 从输入侧限量。
+pub const MAX_RESPONSE_BYTES: usize = 256 * 1024;
+
+/// 首次加载时把消息裁到两个上界之内:先按条数,再按序列化后的字节数。
+/// 两者都是**从最旧的一头丢**。
+pub fn clamp_for_reset(mut messages: Vec<Message>) -> Vec<Message> {
+    if messages.len() > MAX_MESSAGES {
+        messages.drain(..messages.len() - MAX_MESSAGES);
+    }
+    while messages.len() > 1 {
+        let size = serde_json::to_string(&messages).map(|s| s.len()).unwrap_or(0);
+        if size <= MAX_RESPONSE_BYTES {
+            break;
+        }
+        // 一次丢一成,免得在一条条丢的过程中反复序列化整个列表
+        let drop = (messages.len() / 10).max(1);
+        messages.drain(..drop);
+    }
+    messages
+}
+
 /// 这一次该读文件的哪一段。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Plan {
@@ -184,10 +212,10 @@ pub fn read_window(
     let text = String::from_utf8_lossy(body);
     let mut messages = parse(&text);
 
-    // 条数上界**只作用于首次加载**:那时保留最近的即可。增量不能丢头(会静默丢消息),
+    // 上界**只作用于首次加载**:那时保留最近的即可。增量不能丢头(会静默丢消息),
     // 它靠 INCREMENT_BYTES + `more` 来限量。
-    if plan.reset && messages.len() > MAX_MESSAGES {
-        messages.drain(..messages.len() - MAX_MESSAGES);
+    if plan.reset {
+        messages = clamp_for_reset(messages);
     }
 
     Ok(Window {

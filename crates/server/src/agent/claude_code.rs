@@ -182,6 +182,14 @@ impl AgentAdapter for ClaudeCode {
         })
     }
 
+    fn supports_transcript(&self) -> bool {
+        true
+    }
+
+    fn parse_transcript(&self, text: &str) -> Vec<super::transcript::Message> {
+        super::claude_transcript::parse(text)
+    }
+
     fn is_blocking(&self, event: &str) -> bool {
         BLOCKING.contains(&event)
     }

@@ -101,6 +101,18 @@ pub trait AgentAdapter: Send + Sync {
     /// 不能因为多了一个事件名就 500,更不能因此把 Claude 卡住。
     fn parse(&self, event: &str, body: &serde_json::Value) -> Option<store::Update>;
 
+    /// 这家的对话记录能不能读。`false` 时聊天视图回落到终端,并说明是「还不支持」
+    /// 而不是「出错了」—— 两者对用户是两回事。
+    fn supports_transcript(&self) -> bool {
+        false
+    }
+
+    /// 把这家的对话记录解析成归一化消息。只在 [`Self::supports_transcript`] 为真时调用。
+    fn parse_transcript(&self, text: &str) -> Vec<transcript::Message> {
+        let _ = text;
+        Vec::new()
+    }
+
     /// 这个事件是不是「阻塞式」的 —— agent 会挂在 socket 上等我们写响应。
     fn is_blocking(&self, event: &str) -> bool;
 
