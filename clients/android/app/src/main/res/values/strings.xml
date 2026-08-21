@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Octoterm</string>
+
+    <string name="servers_title">服务器</string>
+    <string name="servers_add">添加服务器</string>
+    <string name="servers_add_clipboard">从剪贴板添加</string>
+    <string name="servers_add_manual">手动添加</string>
+    <string name="servers_add_manual_hint">自己填写 URL 和 token</string>
+    <string name="servers_more">更多选项</string>
+    <string name="servers_empty_title">还没有服务器</string>
+    <string name="servers_empty_body">添加服务器地址即可连接。可以直接粘贴守护进程启动时打印的链接。</string>
+    <string name="servers_delete_title">删除这台服务器？</string>
+    <string name="servers_delete_body">从本机移除 %1$s？服务器进程不会被关掉。</string>
+
+    <string name="editor_title_add">添加服务器</string>
+    <string name="editor_title_edit">编辑服务器</string>
+    <string name="editor_url">服务器 URL</string>
+    <string name="editor_url_hint">例如：http://192.168.1.10:7683/#token=…</string>
+    <string name="editor_url_empty">请填写服务器 URL</string>
+    <string name="editor_url_bad">这不像是有效的 URL</string>
+    <string name="editor_token">Token</string>
+    <string name="editor_token_hint">如果 URL 里带有 #token=，会自动填上</string>
+    <string name="editor_token_empty">鉴权需要 token</string>
+    <string name="editor_token_show">显示</string>
+    <string name="editor_token_hide">隐藏</string>
+    <string name="editor_name">名称</string>
+    <string name="editor_name_hint">可选，用来区分多台服务器</string>
+    <string name="editor_paste_clipboard">使用剪贴板里的 URL</string>
+    <string name="editor_warning_loopback">这个地址指向手机自己。请改用电脑的局域网或 Tailscale 地址，不要用 127.0.0.1。</string>
+    <string name="editor_warning_wildcard">0.0.0.0 是监听地址，不是连接目标。请改用主机的真实 IP 或域名。</string>
+
+    <string name="server_connected">鉴权成功</string>
+    <string name="server_connected_body">已连上 %1$s。会话列表下一步再做。</string>
+
+    <string name="action_save">保存</string>
+    <string name="action_cancel">取消</string>
+    <string name="action_delete">删除</string>
+    <string name="action_edit">编辑</string>
+    <string name="action_back">返回</string>
+
+    <string name="msg_saved">已保存</string>
+    <string name="msg_deleted">已删除</string>
+    <string name="msg_auth_failed">服务器拒绝了这个 token</string>
+    <string name="msg_auth_failed_detail">服务器拒绝了这个 token：%1$s</string>
+    <string name="msg_unreachable">连不上服务器，请检查地址和网络</string>
+    <string name="msg_timeout">服务器没有及时响应</string>
+    <string name="msg_closed">鉴权完成前连接就断开了</string>
+    <string name="msg_unexpected">服务器返回了意外响应</string>
+
+    <string name="session_new">新建会话</string>
+    <string name="session_empty_title">还没有会话</string>
+    <string name="session_empty_body">点右下角 + 新建一个默认 shell。</string>
+    <string name="session_kill">结束会话</string>
+    <string name="session_rename_title">重命名会话</string>
+    <string name="session_rename_label">名称</string>
+    <string name="term_keys_hint">点屏幕或「键盘」呼出输入法</string>
+    <string name="term_keyboard">键盘</string>
+
+    <string name="locale_action">语言</string>
+    <string name="locale_auto">跟随系统</string>
+    <string name="locale_zh" translatable="false">简体中文</string>
+    <string name="locale_en" translatable="false">English</string>
+</resources>

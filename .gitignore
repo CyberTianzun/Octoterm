@@ -1,5 +1,9 @@
 /target
 node_modules/
+clients/android/.gradle/
+clients/android/build/
+clients/android/app/build/
+clients/android/local.properties
 clients/web/dist/*
 !clients/web/dist/.gitkeep
 clients/web/test/.protocol.build.mjs
