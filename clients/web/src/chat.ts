@@ -44,8 +44,16 @@ const FALLBACK_KEY: Record<FallbackReason, MsgKey> = {
   "parse-failed": "chat.fallback.parseFailed",
 };
 
-/** 认不出的原因也要说人话,而不是把机器键怼给用户。 */
-export function fallbackText(reason: string): string {
+/**
+ * 认不出的原因也要说人话,而不是把机器键怼给用户。
+ *
+ * `unsupported-agent` 额外带上是哪一家:「这个 AI 读不了」比「读不了」有用得多 ——
+ * 用户至少知道是这家的问题、换个 agent 就能看,而不是以为整个功能坏了。
+ */
+export function fallbackText(reason: string, agentName?: string): string {
+  if (reason === "unsupported-agent") {
+    return t("chat.fallback.unsupported", { agent: agentName ?? "?" });
+  }
   const key = FALLBACK_KEY[reason as FallbackReason];
   return key ? t(key) : t("chat.fallback.unreadable");
 }

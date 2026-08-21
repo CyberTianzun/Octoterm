@@ -61,3 +61,19 @@ test("preview 优先取正文,没有正文就取工具调用", () => {
   const toolOnly = { id: "t", role: "assistant", ts: null, blocks: [{ kind: "tool-use", name: "Bash", input: "ls" }] };
   assert.equal(preview(toolOnly), "Bash ls");
 });
+
+/// 「这个 AI 读不了」比「读不了」有用得多 —— 用户至少知道是这家的问题、
+/// 换个 agent 就能看,而不是以为整个功能坏了。
+test("unsupported 要说清是哪一家", () => {
+  const s = fallbackText("unsupported-agent", "codex");
+  assert.ok(s.includes("codex"), `没说是哪一家: ${s}`);
+  assert.ok(!s.includes("{agent}"), "占位符没被替换");
+});
+
+test("其它原因不受影响,也不会漏出机器键", () => {
+  for (const r of ["disabled", "no-transcript-path", "unreadable", "parse-failed", "who-knows"]) {
+    const s = fallbackText(r, "codex");
+    assert.ok(s.length > 0);
+    assert.ok(!s.includes(r), `机器键漏到界面上了: ${s}`);
+  }
+});

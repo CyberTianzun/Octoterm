@@ -281,9 +281,6 @@ function openTerminal(id: number) {
   chatCursor = null;
   chatFallback = null;
   viewMode = "terminal";
-  $("session-list").hidden = true;
-  $("back-to-list").hidden = false;
-  $("terminal-wrap").hidden = false;
   term = new Terminal({ allowProposedApi: true, ...toTerminalOptions(config) });
   fit = new FitAddon();
   term.loadAddon(fit);
@@ -295,7 +292,8 @@ function openTerminal(id: number) {
   client.attach(id, TERM_CHANNEL, want?.cols ?? term.cols, want?.rows ?? term.rows);
   term.focus();
   renderSidebar();
-  syncViewToggle();
+  // 视图归位放在终端建好之后:showView 末尾会量尺寸
+  showView();
 }
 
 /**
@@ -330,12 +328,12 @@ function closeTerminal() {
   if (attachedId !== null) client.detach(TERM_CHANNEL);
   attachedId = null;
   disposeTerminal();
-  $("chat-view").hidden = true;
-  $("view-toggle").hidden = true;
-  $("terminal-wrap").hidden = true;
-  $("session-list").hidden = false;
-  $("back-to-list").hidden = true;
+  viewMode = "terminal";
+  chatMessages = [];
+  chatCursor = null;
+  chatFallback = null;
   renderSessionList();
+  showView();
   client.send({ type: "list-sessions" });
 }
 
@@ -428,10 +426,22 @@ function syncViewToggle() {
   btn.textContent = viewMode === "chat" ? t("chat.backToTerminal") : t("chat.open");
 }
 
+/**
+ * **工作区里显示什么,只由这一个函数说了算。**
+ *
+ * 原先 `openTerminal` / `closeTerminal` 各自直接戳 DOM,这里又从 `viewMode` 推一遍,
+ * 于是有了两个真相来源 —— 它们漂移了:`openTerminal` 重置了 `viewMode`、显示了终端,
+ * 却没隐藏聊天面板。结果是切到另一个会话后,上一个会话那块聊天面板还盖在终端上,
+ * 终端打不进字,而按钮文案已经变回「聊天视图」,点它反而切进聊天,看起来无解。
+ *
+ * 所以现在:别处只改状态,改完调这里。
+ */
 function showView() {
   const chatting = viewMode === "chat" && attachedId !== null;
+  $("session-list").hidden = attachedId !== null;
   $("chat-view").hidden = !chatting;
   $("terminal-wrap").hidden = chatting || attachedId === null;
+  $("back-to-list").hidden = attachedId === null;
   syncViewToggle();
   // 从聊天切回终端时终端刚从 hidden 变回可见,尺寸要重新量一次并上报
   if (!chatting && attachedId !== null) refit();
@@ -457,7 +467,7 @@ async function refreshChat(incremental: boolean) {
     incremental ? (chatCursor ?? undefined) : undefined,
   );
   if (win.source !== "transcript") {
-    chatFallback = fallbackText(win.reason);
+    chatFallback = fallbackText(win.reason, agent.agent_id);
     renderChat();
     return;
   }
