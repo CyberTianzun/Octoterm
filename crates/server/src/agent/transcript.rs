@@ -53,6 +53,151 @@ pub struct Message {
     pub blocks: Vec<Block>,
 }
 
+/// 首次加载时从文件末尾回看多少字节。
+///
+/// 挑「末尾一段」而不是整个文件:一个长会话的记录可以上百 MB,为了第一屏去读完它
+/// 是没道理的。回看不到的部分不是丢了 —— 客户端要更早的可以带着游标往前翻(C2 之后)。
+pub const WINDOW_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 增量一次最多读多少字节。
+///
+/// **增量用字节限、不用条数限**,这是有讲究的:条数超了就得丢一头,而增量里丢头
+/// 就是静默丢消息。按字节切则读不完只是「这次没读完」,`more` 一置位客户端再拉一次,
+/// 一条都不会少。
+pub const INCREMENT_BYTES: u64 = 256 * 1024;
+
+/// 单次返回的消息条数上界。**只作用于首次加载**(那时保留最近的即可);
+/// 增量不受它约束,理由见 `INCREMENT_BYTES`。
+pub const MAX_MESSAGES: usize = 200;
+
+/// 这一次该读文件的哪一段。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Plan {
+    pub start: u64,
+    pub end: u64,
+    /// 整窗替换(首次加载,或旧游标已经失效)。客户端应当整段替换而不是追加。
+    pub reset: bool,
+    /// 这次没读完,还有剩的。客户端应当立刻带着新游标再拉一次。
+    pub more: bool,
+}
+
+/// 纯逻辑:给定文件长度与上次的游标,算出这次读哪一段。不碰文件系统,可逐条断言。
+///
+/// 游标是 `(offset, len)`:`offset` 是上次消费到哪,`len` 是上次看到的文件长度。
+/// 带上 `len` 是为了识别**文件变小或被换掉**(compact、开了新会话)—— 那时旧的
+/// `offset` 指向的已经不是原来那条消息了,只能整窗重来,否则会把新文件的中段当成
+/// 旧文件的续集接上去。
+pub fn plan_read(file_len: u64, cursor: Option<(u64, u64)>) -> Plan {
+    let stale = match cursor {
+        None => true,
+        Some((offset, seen_len)) => file_len < seen_len || offset > file_len,
+    };
+    if stale {
+        let start = file_len.saturating_sub(WINDOW_BYTES);
+        return Plan { start, end: file_len, reset: true, more: false };
+    }
+    let (offset, _) = cursor.expect("stale 分支已经处理了 None");
+    let end = (offset + INCREMENT_BYTES).min(file_len);
+    Plan { start: offset, end, reset: false, more: end < file_len }
+}
+
+/// 从读到的字节里切出「完整的若干行」,并告诉调用方消费了多少字节。
+///
+/// 两头各有一个陷阱:
+///
+/// - **开头**:按字节回切的窗口几乎必然落在半行上。那半行必须丢掉,否则第一条消息
+///   是残的 —— 而残行解析失败之后,用户看到的现象是「少了一条」,极难归因。
+///   续读的起点是上次算出来的行首,所以由 `drop_partial_head` 区分这两种情况。
+/// - **结尾**:最后那半行多半是「正在被写入」的一条。这次不能算消费掉,游标要停在
+///   它前面,下次连着后半截一起读。
+pub fn slice_window(buf: &[u8], start_in_buf: usize, drop_partial_head: bool) -> (&[u8], u64) {
+    let mut body = &buf[start_in_buf.min(buf.len())..];
+    let mut skipped = 0usize;
+    if drop_partial_head && start_in_buf > 0 {
+        match body.iter().position(|b| *b == b'\n') {
+            Some(i) => {
+                skipped = i + 1;
+                body = &body[skipped..];
+            }
+            // 整段里一个换行都没有:全是半行,什么都别要
+            None => return (&body[body.len()..], body.len() as u64),
+        }
+    }
+    let end = match body.iter().rposition(|b| *b == b'\n') {
+        Some(i) => i + 1,
+        None => 0,
+    };
+    (&body[..end], (skipped + end) as u64)
+}
+
+/// 一次读取的结果。
+#[derive(Debug, Clone, Serialize)]
+pub struct Window {
+    pub messages: Vec<Message>,
+    /// 不透明串,原样传回来即可。内部是 `消费到哪.当时文件多长`。
+    pub cursor: String,
+    pub reset: bool,
+    pub more: bool,
+}
+
+/// 游标对客户端**不透明**:它只负责原样带回来。做成不透明是为了以后能换实现
+/// (换成 inode + 偏移、或者带上文件指纹)而不必动协议。
+pub fn encode_cursor(offset: u64, len: u64) -> String {
+    format!("{offset}.{len}")
+}
+
+pub fn decode_cursor(s: &str) -> Option<(u64, u64)> {
+    let (o, l) = s.split_once('.')?;
+    Some((o.parse().ok()?, l.parse().ok()?))
+}
+
+/// 读一个窗口。`parse` 由 adapter 提供 —— 这里只管切,不管「一行是什么意思」。
+pub fn read_window(
+    path: &std::path::Path,
+    cursor: Option<&str>,
+    parse: &dyn Fn(&str) -> Vec<Message>,
+) -> std::io::Result<Window> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    let file_len = std::fs::metadata(path)?.len();
+    let plan = plan_read(file_len, cursor.and_then(decode_cursor));
+
+    // 没有新字节:直接回一个空窗,不去开文件
+    if plan.start >= plan.end && !plan.reset {
+        return Ok(Window {
+            messages: Vec::new(),
+            cursor: encode_cursor(plan.start, file_len),
+            reset: false,
+            more: false,
+        });
+    }
+
+    let mut f = std::fs::File::open(path)?;
+    f.seek(SeekFrom::Start(plan.start))?;
+    let mut buf = vec![0u8; (plan.end - plan.start) as usize];
+    let n = f.read(&mut buf)?;
+    buf.truncate(n);
+
+    // 只有「跳进文件中段」时才丢开头那半行;续读的起点本来就是行首
+    let (body, consumed) = slice_window(&buf, 0, plan.reset && plan.start > 0);
+    // 记录里可能混进非法字节(截断的多字节字符),不能让它把整次读取变成错误
+    let text = String::from_utf8_lossy(body);
+    let mut messages = parse(&text);
+
+    // 条数上界**只作用于首次加载**:那时保留最近的即可。增量不能丢头(会静默丢消息),
+    // 它靠 INCREMENT_BYTES + `more` 来限量。
+    if plan.reset && messages.len() > MAX_MESSAGES {
+        messages.drain(..messages.len() - MAX_MESSAGES);
+    }
+
+    Ok(Window {
+        messages,
+        cursor: encode_cursor(plan.start + consumed, file_len),
+        reset: plan.reset,
+        more: plan.more,
+    })
+}
+
 /// 单个块的文本上界。一次 `cat` 的输出可以是几 MB,聊天视图不需要那么多。
 pub const MAX_BLOCK_BYTES: usize = 8 * 1024;
 
