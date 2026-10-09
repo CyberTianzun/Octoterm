@@ -192,10 +192,17 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
   authenticated. No other message is processed before this point. `os` is the
   server's `std::env::consts::OS` (`windows`, `macos`, `linux`, …). Clients use
   it to pick a key encoding: on Windows the pty is ConPTY, which rebuilds key
-  events from the input bytes, and plain VT bytes cannot carry combinations such
-  as Shift+Enter, so a client MAY send win32-input-mode sequences
-  (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) for them. Missing `os` (older servers) means
-  unknown: keep the plain VT encoding.
+  events from the input bytes. Clients MAY encode physical keyboard events with
+  win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) to retain the virtual key, scan
+  code, character, press/release state, modifiers and repeat count. In particular,
+  plain VT loses Enter modifiers and can reconstruct Ctrl+J as Ctrl+Enter.
+  The web client uses this encoding for mapped physical keys on Windows, before
+  xterm's VT encoding and Alt-arrow remapping. Keydown/repeats and keyup are
+  separate events; blur/detach releases tracked keys. IME/dead-key/AltGr text,
+  non-ASCII text, paste and terminal replies retain xterm's byte input path.
+  Clipboard and browser shortcuts retain their browser default actions; keys
+  reserved by the browser or OS cannot be forwarded if no DOM event is delivered.
+  Missing `os` (older servers) means unknown: keep the plain VT encoding.
 - **H3** Token or proto mismatch → `error` then close. Token comparison is
   exact string equality.
 - **H4** Non-binary first message → `error` then close.

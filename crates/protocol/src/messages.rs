@@ -69,8 +69,8 @@ pub enum ClientMsg {
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ServerMsg {
     /// `os` 是服务端的 `std::env::consts::OS`("windows" / "macos" / "linux" …)。
-    /// 客户端需要它来决定键盘编码:Windows 上中间隔着 ConPTY,传统 VT 字节表达
-    /// 不了 Shift+Enter 这类组合,得改发 win32-input-mode 序列。旧服务端不发
+    /// 客户端需要它来决定键盘编码:Windows 上中间隔着 ConPTY,传统 VT 字节会
+    /// 丢掉按键身份/修饰键,物理键盘应采用 win32-input-mode 序列。旧服务端不发
     /// 这个字段,按缺省空串解析,客户端视为"未知"、维持原有编码。
     HelloOk {
         proto: u32,

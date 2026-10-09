@@ -15,7 +15,7 @@ import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
-import { encodeKey, type ServerOs } from "./keys";
+import { browserShortcut, WindowsKeyboardAdapter, type ServerOs } from "./keys";
 import {
   type ChatWindow,
   type Message as ChatMessage,
@@ -51,6 +51,7 @@ let sessions: any[] = [];
 let attachedId: number | null = null;
 /** hello-ok 报来的服务端系统,决定部分按键的编码(见 keys.ts)。 */
 let serverOs: ServerOs = "";
+let keyboard: WindowsKeyboardAdapter | null = null;
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
@@ -275,6 +276,7 @@ function openTerminal(id: number) {
     return;
   }
   if (attachedId !== null) {
+    releaseKeyboard();
     client.detach(TERM_CHANNEL);
     disposeTerminal();
   }
@@ -291,11 +293,32 @@ function openTerminal(id: number) {
   // WebGL addon 必须在 open() 之后装:它要拿 DOM 里的 canvas 上下文。
   applyRenderer(term);
   term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
-  term.attachCustomKeyEventHandler((ev) => {
-    const seq = encodeKey(ev, serverOs);
-    if (seq === null) return true;
+  const terminal = term;
+  const adapter = keyboard = new WindowsKeyboardAdapter(
+    /Mac/.test(navigator.platform) && !terminal.options.macOptionIsMeta,
+  );
+  terminal.textarea!.addEventListener("compositionstart", () => adapter.setComposing(true));
+  terminal.textarea!.addEventListener("compositionend", () => {
+    // xterm 在下一轮事件循环才提交合成文字;在它之前不要截获结束合成的 Enter。
+    window.setTimeout(() => adapter.setComposing(false), 0);
+  });
+  terminal.textarea!.addEventListener("blur", () => {
+    if (term === terminal) releaseKeyboard();
+  });
+  terminal.attachCustomKeyEventHandler((ev) => {
+    const selected = terminal.hasSelection();
+    const seq = adapter.encode(ev, serverOs, selected);
+    if (seq === null) {
+      // 复制/粘贴/浏览器命令要保留默认动作,也不能再让 xterm 发 Ctrl+V 等字节。
+      return serverOs !== "windows" || !browserShortcut(ev, selected);
+    }
     if (seq) client.sendInput(TERM_CHANNEL, new TextEncoder().encode(seq));
+    if (ev.type === "keydown" && !["Shift", "Control", "Alt", "CapsLock", "NumLock", "ScrollLock"].includes(ev.key)) {
+      if (terminal.options.scrollOnUserInput) terminal.scrollToBottom();
+      if (ev.key === "Enter" || (ev.ctrlKey && ev.key.toLowerCase() === "c")) terminal.textarea!.value = "";
+    }
     ev.preventDefault();
+    ev.stopPropagation();
     return false;
   });
   const want = proposeSize();
@@ -325,9 +348,16 @@ function disposeWebgl() {
   }
 }
 
+function releaseKeyboard() {
+  const seq = keyboard?.releaseAll();
+  if (seq) client.sendInput(TERM_CHANNEL, new TextEncoder().encode(seq));
+}
+
 /** addon 必须先于 Terminal 释放:0.18.0 的恢复路径会去碰 `_core._renderService`,
  *  Terminal 先没了就是对着一个拆掉的 render service 操作。 */
 function disposeTerminal() {
+  keyboard?.reset();
+  keyboard = null;
   disposeWebgl();
   term?.dispose();
   term = null;
@@ -335,7 +365,10 @@ function disposeTerminal() {
 }
 
 function closeTerminal() {
-  if (attachedId !== null) client.detach(TERM_CHANNEL);
+  if (attachedId !== null) {
+    releaseKeyboard();
+    client.detach(TERM_CHANNEL);
+  }
   attachedId = null;
   disposeTerminal();
   viewMode = "terminal";
@@ -409,10 +442,12 @@ client.onOpen = () => {
   client.send({ type: "list-sessions" });
 };
 client.onReconnecting = () => {
+  keyboard?.reset();
   setBanner(() => t("conn.banner.reconnecting"));
   setConn("conn.reconnecting");
 };
 client.onFatal = (message) => {
+  keyboard?.reset();
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
