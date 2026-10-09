@@ -36,7 +36,9 @@ import {
   secondsLeft,
   applyEvent,
   fetchAgentSessions,
+  chatAvailable,
   chatAgentFor,
+  keyOf,
   forSession,
   replaceAll,
   stateText,
@@ -58,6 +60,7 @@ let webgl: WebglAddon | null = null;
 const previews = new Map<number, Terminal>();
 /** key = `${agent_id} ${agent_session_id}`,见 agents.ts */
 const agents: AgentMap = new Map();
+let transcriptEnabled = false;
 /** 挂起请求的详情,key = pending id。广播里没有命令原文,详情单独拉(见 agents.ts)。 */
 const pendingDetails = new Map<string, PendingDetail>();
 /** 倒计时的刷新句柄。重绘时先清掉,免得叠出多个。 */
@@ -74,6 +77,7 @@ let chatCursor: string | null = null;
 let chatFallback: string | null = null;
 
 let config: OctoConfig = loadConfig(resolveTheme);
+const narrowSidebar = window.matchMedia("(max-width: 768px)");
 // 语言先于任何一次渲染定下来:下面 mountSettings / mountNewSessionMenu 在模块
 // 求值时就会铺一批静态文案,那时 t() 必须已经指向对的词条表。
 applyLocale();
@@ -135,6 +139,7 @@ function setBanner(render: (() => string) | null) {
 // 设置面板和新建会话菜单各自订阅了自己的那部分。
 subscribe(() => {
   applyStaticText();
+  syncSidebarPosition();
   renderSidebar();
   setConn(connKey);
   setBanner(banner);
@@ -150,6 +155,7 @@ function applyConfig(next: OctoConfig) {
   // 语言真变了才会通知订阅者(setLocale 对同值是空操作),所以不必自己比一遍
   applyLocale();
   applyUiColors(config);
+  syncSidebarPosition();
   if (term) {
     term.options = toTerminalOptions(config);
     applyRenderer(term);
@@ -204,12 +210,14 @@ function renderSidebar() {
   }
   for (const s of sessions) {
     const row = document.createElement("div");
-    row.className = "srow" + (s.id === attachedId ? " active" : "");
+    const showChat = s.id === attachedId && chatAvailable(agents, s.id, transcriptEnabled);
+    row.className = "srow" + (s.id === attachedId ? " active" : "") + (showChat ? " has-chat" : "");
     row.innerHTML = `
       <div class="sname"></div>
       <div class="smeta"></div>
       <div class="preview"></div>
       <div class="sacts">
+        ${showChat ? '<button type="button" data-act="view-toggle" aria-controls="chat-view"></button>' : ""}
         <button data-act="rename" title="${t("session.rename")}">✎</button>
         <button data-act="kill" title="${t("session.kill")}">✕</button>
       </div>`;
@@ -231,7 +239,12 @@ function renderSidebar() {
       previewBox.hidden = true;
     }
     row.addEventListener("click", (ev) => {
-      const act = (ev.target as HTMLElement).dataset?.act;
+      const act = (ev.target as Element).closest<HTMLButtonElement>("button[data-act]")?.dataset.act;
+      if (act === "view-toggle") {
+        ev.stopPropagation();
+        toggleView();
+        return;
+      }
       if (act === "kill") {
         ev.stopPropagation();
         client.send({ type: "kill-session", id: s.id });
@@ -250,11 +263,41 @@ function renderSidebar() {
     });
     nav.appendChild(row);
   }
+  syncViewToggle();
 }
 
 function setDrawer(open: boolean) {
+  open = open && config.ui.sidebarPosition !== "hidden" && narrowSidebar.matches;
   document.body.classList.toggle("sidebar-open", open);
   $("scrim").hidden = !open;
+  $("sidebar").inert = config.ui.sidebarPosition === "hidden" || (narrowSidebar.matches && !open);
+  $("menu").setAttribute("aria-expanded", String(open));
+}
+
+function syncSidebarPosition() {
+  const position = config.ui.sidebarPosition;
+  document.body.dataset.sidebarPosition = position;
+  $("sidebar").hidden = position === "hidden";
+  $("sidebar-show").hidden = position !== "hidden";
+  const button = $("sidebar-position");
+  const label = position === "left" ? t("sidebar.pinRight") : t("sidebar.hide");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+  $("sidebar-show").setAttribute("aria-label", t("sidebar.show"));
+  button.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/>${
+    position === "left" ? '<path d="M15 4v16m-8-11 3 3-3 3"/>' : '<path d="M9 4v16m5-11 3 3-3 3"/>'
+  }</svg>`;
+  setDrawer(document.body.classList.contains("sidebar-open"));
+  requestAnimationFrame(refit);
+}
+
+function setSidebarPosition(position: OctoConfig["ui"]["sidebarPosition"]) {
+  config = { ...config, ui: { ...config.ui, sidebarPosition: position } };
+  saveConfig(config);
+  syncSidebarPosition();
+  // 窄屏恢复/换边后立即展开对应抽屉,让用户看得见刚选的位置。
+  setDrawer(position !== "hidden" && narrowSidebar.matches);
+  (position === "hidden" ? $("sidebar-show") : $("sidebar-position")).focus();
 }
 
 let errorTimer = 0;
@@ -398,17 +441,28 @@ function refit() {
 window.addEventListener("resize", refit);
 window.visualViewport?.addEventListener("resize", refit);
 $("menu").addEventListener("click", () => setDrawer(true));
+$("sidebar-position").addEventListener("click", () => {
+  setSidebarPosition(config.ui.sidebarPosition === "left" ? "right" : "hidden");
+});
+$("sidebar-show").addEventListener("click", () => setSidebarPosition("left"));
+narrowSidebar.addEventListener("change", () => {
+  setDrawer(false);
+  requestAnimationFrame(refit);
+});
 // 回列表 = detach 并回到主视图。会话本身不受影响(协议 CH6:detach 从不结束会话),
 // 再点进来是一次 resync —— 用一次重绘换「随时能纵览全局」,值。
 //
 // 顺手关掉抽屉:窄屏上侧边栏是盖在工作区上的浮层,不关掉的话点完这个按钮,
 // 身后那张列表页恰好被挡住,看起来像什么都没发生。
-$("view-toggle").addEventListener("click", () => {
+function toggleView() {
+  if (viewMode === "terminal" && !chatAvailable(agents, attachedId, transcriptEnabled)) return;
   viewMode = viewMode === "chat" ? "terminal" : "chat";
+  setDrawer(false);
   showView();
   // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
   if (viewMode === "chat") void refreshChat(false);
-});
+  else term?.focus();
+}
 $("back-to-list").addEventListener("click", () => {
   setDrawer(false);
   closeTerminal();
@@ -435,6 +489,7 @@ mountNewSessionMenu($("new-session"), {
 });
 
 client.onOpen = () => {
+  agentRevision++;
   // 断线期间漏掉的 agent-event 靠这次全量拉取补齐,不做增量对账
   void refreshAgents();
   setBanner(null);
@@ -442,12 +497,20 @@ client.onOpen = () => {
   client.send({ type: "list-sessions" });
 };
 client.onReconnecting = () => {
+  agentRevision++;
   keyboard?.reset();
+  transcriptEnabled = false;
+  renderSidebar();
+  showView();
   setBanner(() => t("conn.banner.reconnecting"));
   setConn("conn.reconnecting");
 };
 client.onFatal = (message) => {
+  agentRevision++;
   keyboard?.reset();
+  transcriptEnabled = false;
+  renderSidebar();
+  showView();
   setBanner(() => t("conn.banner.fatal", { message }));
   setConn("conn.disconnected");
 };
@@ -457,18 +520,19 @@ function attachedAgent(): AgentSession | null {
 }
 
 function syncViewToggle() {
-  const btn = $("view-toggle") as HTMLButtonElement;
-  // **只要 attach 了会话就显示**。
-  //
-  // 初版是「没有 agent 就藏起来」,理由是「一个点了必然失败的按钮比没有按钮更糟」——
-  // 那条推理是错的。点了会**解释原因**的按钮,和点了没反应的按钮不是一回事;而藏起来
-  // 的结果是这个功能彻底不可发现:没有入口、没有提示,用户连它存在都不知道。
-  //
-  // 服务端那套带类型的回落(disabled / no-transcript-path / unsupported-agent …)
-  // 本来就是为了「说清为什么不可用」而建的。把入口藏掉,等于让那套解释永远没机会
-  // 被看到。**回落本身就是入口的说明书。**
-  btn.hidden = attachedId === null;
-  btn.textContent = viewMode === "chat" ? t("chat.backToTerminal") : t("chat.open");
+  const btn = document.querySelector<HTMLButtonElement>("#session-nav .srow.active [data-act='view-toggle']");
+  if (!btn) return;
+  // renderSidebar 只为支持 transcript 且读取权限已开启的当前会话建立入口。
+  const chatting = viewMode === "chat";
+  const label = chatting ? t("chat.backToTerminal") : t("chat.open");
+  btn.title = label;
+  btn.setAttribute("aria-label", label);
+  btn.setAttribute("aria-pressed", String(chatting));
+  btn.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${
+    chatting
+      ? '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="m7 9 3 3-3 3m6 0h4"/>'
+      : '<path d="M21 14a3 3 0 0 1-3 3H8l-5 4V6a3 3 0 0 1 3-3h12a3 3 0 0 1 3 3z"/><path d="M7 8h10M7 12h7"/>'
+  }</svg>`;
 }
 
 /**
@@ -482,6 +546,10 @@ function syncViewToggle() {
  * 所以现在:别处只改状态,改完调这里。
  */
 function showView() {
+  if (viewMode === "chat" && !chatAvailable(agents, attachedId, transcriptEnabled)) {
+    viewMode = "terminal";
+    term?.focus();
+  }
   const chatting = viewMode === "chat" && attachedId !== null;
   $("session-list").hidden = attachedId !== null;
   $("chat-view").hidden = !chatting;
@@ -498,6 +566,10 @@ function showView() {
  * 服务端说 `more` 就立刻再拉一次 —— 那表示这次是被字节上限截断的,不是没有了。
  */
 async function refreshChat(incremental: boolean) {
+  if (!chatAvailable(agents, attachedId, transcriptEnabled)) {
+    showView();
+    return;
+  }
   const agent = attachedAgent();
   if (!agent) {
     // 这个会话里没有认出任何 agent。说清楚,并给一条出路 —— 沉默会让人以为是坏了。
@@ -505,12 +577,16 @@ async function refreshChat(incremental: boolean) {
     renderChat();
     return;
   }
+  const sessionId = attachedId;
   const win: ChatWindow = await fetchMessages(
     token(),
     agent.agent_id,
     agent.agent_session_id,
     incremental ? (chatCursor ?? undefined) : undefined,
   );
+  const currentAgent = attachedAgent();
+  if (attachedId !== sessionId || !chatAvailable(agents, attachedId, transcriptEnabled) ||
+      !currentAgent || keyOf(currentAgent) !== keyOf(agent)) return;
   if (win.source !== "transcript") {
     chatFallback = fallbackText(win.reason, agent.agent_id);
     renderChat();
@@ -922,13 +998,37 @@ async function refreshPendingDetails() {
   renderAgentBanner();
 }
 
-/** 全量拉取。页面打开和每次重连后都要做一次(协议 A5)。 */
+let agentRefresh: Promise<void> | null = null;
+let agentRefreshAgain = false;
+let agentRevision = 0;
+
+/** 初次连接、重连和新 agent 首次出现时补齐能力与读取权限;合并并发刷新。 */
 async function refreshAgents() {
-  replaceAll(agents, (await fetchAgentSessions(token())) as AgentSession[]);
-  renderSidebar();
-  renderSessionList();
-  renderAgentBanner();
-  void refreshPendingDetails();
+  if (agentRefresh) {
+    agentRefreshAgain = true;
+    return agentRefresh;
+  }
+  agentRefresh = (async () => {
+    do {
+      agentRefreshAgain = false;
+      const revision = agentRevision;
+      const snapshot = await fetchAgentSessions(token());
+      // 拉取期间到达的 start/done 事件不能被较旧的 HTTP 快照覆盖。
+      if (revision !== agentRevision) {
+        agentRefreshAgain = true;
+        continue;
+      }
+      transcriptEnabled = snapshot.transcript_enabled;
+      replaceAll(agents, snapshot.sessions);
+      renderSidebar();
+      renderSessionList();
+      renderAgentBanner();
+      showView();
+      void refreshPendingDetails();
+    } while (agentRefreshAgain);
+  })();
+  try { await agentRefresh; }
+  finally { agentRefresh = null; }
 }
 
 client.onChannelData = (channel, payload) => {
@@ -954,11 +1054,15 @@ client.onControl = (msg) => {
       client.send({ type: "list-sessions" });
       break;
     case "agent-event":
+      agentRevision++;
       applyEvent(agents, msg as AgentSession);
       renderSidebar();
       renderSessionList();
       renderAgentBanner();
-      syncViewToggle();
+      showView();
+      if (msg.state !== "done" && agents.get(keyOf(msg))?.supports_transcript === undefined) {
+        void refreshAgents();
+      }
       // 有事件才可能有新消息 —— 所以不做轮询
       if (viewMode === "chat" && (msg as AgentSession).session === attachedId) {
         void refreshChat(true);
@@ -995,6 +1099,7 @@ client.onControl = (msg) => {
 // 以及 index.html 里那些还空着的 data-i18n 节点
 applyUiColors(config);
 applyStaticText();
+syncSidebarPosition();
 setConn(connKey);
 // 只取一次:token() 在 localStorage 里没有时会 prompt,取两次就要问两遍
 const authToken = token();

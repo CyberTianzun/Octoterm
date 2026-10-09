@@ -21,16 +21,16 @@ async fn server(transcript: bool) -> SocketAddr {
 
 /// 让服务端知道有这么一个 agent 会话,并(可选地)带上记录路径。
 async fn seed(addr: SocketAddr, transcript: Option<&str>) {
-    let body = match transcript {
-        Some(p) => format!(r#"{{"session_id":"s1","transcript_path":"{p}"}}"#),
-        None => r#"{"session_id":"s1"}"#.to_string(),
-    };
+    let mut body = serde_json::json!({ "session_id": "s1" });
+    if let Some(path) = transcript {
+        body["transcript_path"] = serde_json::json!(path);
+    }
     reqwest::Client::new()
         .post(format!("http://{addr}/hook/claude-code/session-start"))
         .header("Authorization", format!("Bearer {}", hook_token()))
         .header("X-Octoterm-Session", "1")
         .header("Content-Type", "application/json")
-        .body(body)
+        .body(body.to_string())
         .send()
         .await
         .unwrap();
@@ -55,6 +55,22 @@ async fn requires_the_client_bearer() {
     let addr = server(true).await;
     let (status, _) = messages(addr, "claude-code", "wrong").await;
     assert_eq!(status, 401);
+}
+
+#[tokio::test]
+async fn session_snapshot_reports_transcript_permission_separately_from_format_support() {
+    for enabled in [false, true] {
+        let addr = server(enabled).await;
+        seed(addr, None).await;
+        let response = reqwest::Client::new()
+            .get(format!("http://{addr}/api/agents/sessions"))
+            .header("Authorization", "Bearer tok")
+            .send().await.unwrap();
+        assert_eq!(response.status().as_u16(), 200);
+        let snapshot: serde_json::Value = serde_json::from_str(&response.text().await.unwrap()).unwrap();
+        assert_eq!(snapshot["transcript_enabled"], enabled);
+        assert_eq!(snapshot["sessions"][0]["supports_transcript"], true);
+    }
 }
 
 /// **默认关**。装 hook 是一个决定,把整段对话送上网是另一个决定,后者不能靠前者

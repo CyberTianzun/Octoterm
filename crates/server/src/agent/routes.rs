@@ -171,7 +171,10 @@ pub async fn sessions(State(state): State<AppState>, headers: HeaderMap) -> Resp
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
     }
-    Json(serde_json::json!({ "sessions": state.agent_sessions.list() })).into_response()
+    Json(serde_json::json!({
+        "sessions": state.agent_sessions.list(),
+        "transcript_enabled": state.agents.transcript_enabled,
+    })).into_response()
 }
 
 /// 认不出的调用一律 **200 + 空体**,而不是 4xx。

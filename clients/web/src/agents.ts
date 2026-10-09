@@ -44,7 +44,8 @@ export function keyOf(s: { agent_id: string; agent_session_id: string }): string
  */
 export function applyEvent(map: AgentMap, ev: AgentSession): AgentMap {
   if (ev.state === "done") map.delete(keyOf(ev));
-  else map.set(keyOf(ev), ev);
+  // agent-event 不携带格式能力;保留 HTTP 快照已经给出的 supports_transcript。
+  else map.set(keyOf(ev), { ...map.get(keyOf(ev)), ...ev });
   return map;
 }
 
@@ -95,6 +96,11 @@ export function chatAgentFor(map: AgentMap, sessionId: number): AgentSession | n
     if (!readable || PRIORITY[s.state] > PRIORITY[readable.state]) readable = s;
   }
   return readable ?? forSession(map, sessionId);
+}
+
+/** 聊天入口既需要本会话的格式支持,也需要服务端明确允许读 transcript。 */
+export function chatAvailable(map: AgentMap, sessionId: number | null, transcriptEnabled: boolean): boolean {
+  return transcriptEnabled && sessionId !== null && chatAgentFor(map, sessionId)?.supports_transcript === true;
 }
 
 /** 所有正在等人回答的。按托管会话 id 排序,让列表稳定不跳。 */
@@ -158,17 +164,27 @@ function authHeaders(token: string): HeadersInit {
 }
 
 /**
- * 全量快照。任何一步失败都返回空数组而不是抛 —— 服务端可能是没有这个路由的
+ * 全量快照。任何一步失败都返回空会话表并关闭聊天入口 —— 服务端可能没有这个路由的
  * 旧版本(协议 T12:客户端必须容忍 `/api/` 路由缺失,降级而不是卡住)。
  */
-export async function fetchAgentSessions(token: string): Promise<AgentSession[]> {
+export interface AgentSessions {
+  sessions: AgentSession[];
+  transcript_enabled: boolean;
+}
+
+export async function fetchAgentSessions(token: string): Promise<AgentSessions> {
+  const unavailable = { sessions: [], transcript_enabled: false };
   try {
     const r = await fetch("/api/agents/sessions", { headers: authHeaders(token) });
-    if (!r.ok) return [];
+    if (!r.ok) return unavailable;
     const body = await r.json();
-    return Array.isArray(body?.sessions) ? body.sessions : [];
+    return {
+      sessions: Array.isArray(body?.sessions) ? body.sessions : [],
+      // 旧服务端、坏响应或未成功取得权限时一律隐藏入口。
+      transcript_enabled: body?.transcript_enabled === true,
+    };
   } catch {
-    return [];
+    return unavailable;
   }
 }
 

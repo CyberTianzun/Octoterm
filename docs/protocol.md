@@ -100,7 +100,7 @@ scope:         everything on the wire between a client and octoterm-server
 | `GET /api/agents/{id}/plan` | `{ "install": [...], "uninstall": [...] }` | dry run: what editing the agent's config would do |
 | `POST /api/agents/{id}/install` | `{ "changed": bool, "files": [...] }` | T10a; `403` when disabled |
 | `POST /api/agents/{id}/uninstall` | same | T10a |
-| `GET /api/agents/sessions` | `{ "sessions": [AgentSession] }` | full snapshot; a client re-fetches this after every reconnect (A5) |
+| `GET /api/agents/sessions` | `{ "sessions": [AgentSession], "transcript_enabled": bool }` | full snapshot plus permission to read chat transcripts; a client re-fetches this after every reconnect (A5) |
 | `GET /api/agents/pending` | `{ "pending": [PendingRequest] }` | what is blocked waiting for a human, with the tool name and arguments needed to decide |
 | `POST /api/agents/answer` | `200` / `404` / `409` | T10a; answers one pending request. `409` = someone already answered it |
 | `GET /api/agents/messages` | see §15 A9 | the conversation itself, for a chat-style view |
@@ -577,6 +577,11 @@ Every item MUST be answered in the proposal.
   `GET /api/agents/sessions` for the full snapshot; `agent-event` only carries
   deltas afterwards. Events missed while disconnected are recovered by that
   fetch, not by replay (R6).
+  The snapshot includes `transcript_enabled`, the permission to read conversation
+  files; it is independent of hook-install permission. The web chat toggle is
+  available only when this is explicitly true and the current terminal has an
+  active agent with `supports_transcript: true`. Unknown permission, no agent or
+  unsupported format hides the toggle; losing eligibility returns to terminal.
 - **A6** `state` is a **closed** enum. Adding a value is breaking for strict
   decoders and MUST go through §12.
 - **A7** `agent-event` carries no VT bytes and injects nothing into any session

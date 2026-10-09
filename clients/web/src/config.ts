@@ -47,6 +47,8 @@ export interface OctoConfig {
   ui: {
     /** 界面语言。"auto" = 跟随浏览器,见 i18n.resolveLocale。 */
     locale: LocalePref;
+    /** 桌面上的侧边栏位置;窄屏的 left/right 仍使用对应一侧的抽屉。 */
+    sidebarPosition: "left" | "right" | "hidden";
     /** 侧边栏里的小终端预览。关掉能省掉每个会话一个 Terminal 实例。 */
     sidebarPreview: boolean;
     /** WebGL 渲染器。关掉回落到 DOM 渲染器。 */
@@ -102,7 +104,7 @@ export function defaultConfig(prefersDark = true): OctoConfig {
       minimumContrastRatio: 1,
       drawBoldTextInBrightColors: true,
     },
-    ui: { locale: "auto", sidebarPreview: true, webgl: true },
+    ui: { locale: "auto", sidebarPosition: "left", sidebarPreview: true, webgl: true },
   };
 }
 
@@ -252,6 +254,7 @@ function sanitizeRest(
     },
     ui: {
       locale: pick(u.locale, ["auto", ...LOCALES] as const, d.ui.locale, "ui.locale", warn),
+      sidebarPosition: pick(u.sidebarPosition, ["left", "right", "hidden"] as const, d.ui.sidebarPosition, "ui.sidebarPosition", warn),
       sidebarPreview: bool(u.sidebarPreview, d.ui.sidebarPreview, "ui.sidebarPreview", warn),
       webgl: bool(u.webgl, d.ui.webgl, "ui.webgl", warn),
     },

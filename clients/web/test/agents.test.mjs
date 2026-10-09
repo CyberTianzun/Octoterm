@@ -12,7 +12,7 @@ execSync("npx esbuild src/agents.ts --bundle --format=esm --outfile=test/.agents
 const {
   applyEvent, replaceAll, forSession, waitingList, keyOf, answerPending, fetchAgentSessions,
   summarizePlan, fetchAgentPlan, describeToolInput, secondsLeft, stateText, fetchPending,
-  parseChoice, buildChoiceAnswer,
+  parseChoice, buildChoiceAnswer, chatAvailable,
 } = await import("./.agents.build.mjs");
 
 const ev = (over = {}) => ({
@@ -68,11 +68,39 @@ test("waitingList 只收有 pending 的,并按托管会话 id 排序", () => {
   assert.deepEqual(waitingList(m).map((s) => s.pending), ["p1", "p3"]);
 });
 
-test("路由不存在时降级为空数组而不是抛(协议 T12)", async () => {
+test("路由缺失或断网时关闭聊天入口(协议 T12)", async () => {
   globalThis.fetch = async () => ({ ok: false, status: 404 });
-  assert.deepEqual(await fetchAgentSessions("tok"), []);
+  assert.deepEqual(await fetchAgentSessions("tok"), { sessions: [], transcript_enabled: false });
   globalThis.fetch = async () => { throw new Error("offline"); };
-  assert.deepEqual(await fetchAgentSessions("tok"), []);
+  assert.deepEqual(await fetchAgentSessions("tok"), { sessions: [], transcript_enabled: false });
+});
+
+test("聊天入口只对本会话中支持 transcript 的 agent 和明确的读取权限开放", () => {
+  const m = new Map();
+  assert.equal(chatAvailable(m, 1, true), false);
+  applyEvent(m, ev({supports_transcript:true,session:2}));
+  assert.equal(chatAvailable(m, 1, true), false);
+  applyEvent(m, ev({supports_transcript:true,session:1}));
+  assert.equal(chatAvailable(m, 1, false), false);
+  assert.equal(chatAvailable(m, null, true), false);
+  assert.equal(chatAvailable(m, 1, true), true);
+  applyEvent(m, ev({state:"waiting"})); // 广播没有能力字段,HTTP 快照的能力不能丢。
+  assert.equal(chatAvailable(m, 1, true), true);
+  applyEvent(m, ev({state:"done"}));
+  assert.equal(chatAvailable(m, 1, true), false);
+  applyEvent(m, ev({agent_id:"other",supports_transcript:false}));
+  assert.equal(chatAvailable(m, 1, true), false);
+});
+
+test("旧服务端和非布尔读取权限不会打开聊天入口", async () => {
+  for (const flag of [undefined, false, "true", 1]) {
+    globalThis.fetch = async () => ({ok:true,json:async()=>({sessions:[ev({supports_transcript:true})],transcript_enabled:flag})});
+    assert.equal((await fetchAgentSessions("tok")).transcript_enabled, false);
+  }
+  globalThis.fetch = async () => ({ok:true,json:async()=>({sessions:[ev()],transcript_enabled:true})});
+  const snapshot = await fetchAgentSessions("tok");
+  assert.equal(snapshot.transcript_enabled, true);
+  assert.equal(snapshot.sessions.length, 1);
 });
 
 test("回答的三种失败要能分开:过期 / 别人先答了 / 送不到", async () => {
