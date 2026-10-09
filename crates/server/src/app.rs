@@ -125,7 +125,10 @@ async fn handshake(socket: &mut WebSocket, state: &AppState) -> bool {
         Some(ClientMsg::Hello { token, proto })
             if token == state.token && proto == PROTO_VERSION =>
         {
-            let _ = socket.send(control_msg(&ServerMsg::HelloOk { proto: PROTO_VERSION })).await;
+            let _ = socket.send(control_msg(&ServerMsg::HelloOk {
+                proto: PROTO_VERSION,
+                os: std::env::consts::OS.to_string(),
+            })).await;
             true
         }
         _ => reject(socket, "bad hello").await,

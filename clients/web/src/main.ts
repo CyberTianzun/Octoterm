@@ -15,6 +15,7 @@ import { mountSettings } from "./settings";
 import { type Launcher, fetchLaunchers } from "./launchers";
 import { type MsgKey, localeTag, navigatorLanguages, resolveLocale, setLocale, subscribe, t } from "./i18n";
 import { mountNewSessionMenu } from "./new-session";
+import { encodeKey, type ServerOs } from "./keys";
 import {
   type ChatWindow,
   type Message as ChatMessage,
@@ -48,6 +49,8 @@ const TERM_CHANNEL = 1;
 
 let sessions: any[] = [];
 let attachedId: number | null = null;
+/** hello-ok 报来的服务端系统,决定部分按键的编码(见 keys.ts)。 */
+let serverOs: ServerOs = "";
 let term: Terminal | null = null;
 let fit: FitAddon | null = null;
 let webgl: WebglAddon | null = null;
@@ -288,6 +291,13 @@ function openTerminal(id: number) {
   // WebGL addon 必须在 open() 之后装:它要拿 DOM 里的 canvas 上下文。
   applyRenderer(term);
   term.onData((d) => client.sendInput(TERM_CHANNEL, new TextEncoder().encode(d)));
+  term.attachCustomKeyEventHandler((ev) => {
+    const seq = encodeKey(ev, serverOs);
+    if (seq === null) return true;
+    if (seq) client.sendInput(TERM_CHANNEL, new TextEncoder().encode(seq));
+    ev.preventDefault();
+    return false;
+  });
   const want = proposeSize();
   client.attach(id, TERM_CHANNEL, want?.cols ?? term.cols, want?.rows ?? term.rows);
   term.focus();
@@ -894,6 +904,9 @@ client.onChannelData = (channel, payload) => {
 };
 client.onControl = (msg) => {
   switch (msg.type) {
+    case "hello-ok":
+      serverOs = typeof msg.os === "string" ? msg.os : "";
+      break;
     case "sessions":
       sessions = msg.sessions;
       renderSidebar();

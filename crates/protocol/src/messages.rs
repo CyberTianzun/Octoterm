@@ -68,7 +68,15 @@ pub enum ClientMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ServerMsg {
-    HelloOk { proto: u32 },
+    /// `os` 是服务端的 `std::env::consts::OS`("windows" / "macos" / "linux" …)。
+    /// 客户端需要它来决定键盘编码:Windows 上中间隔着 ConPTY,传统 VT 字节表达
+    /// 不了 Shift+Enter 这类组合,得改发 win32-input-mode 序列。旧服务端不发
+    /// 这个字段,按缺省空串解析,客户端视为"未知"、维持原有编码。
+    HelloOk {
+        proto: u32,
+        #[serde(default)]
+        os: String,
+    },
     /// `channel` 有值时表示这个错误是针对某个具体 channel 的操作(attach/
     /// detach/resize/input)失败;省略(None)表示连接级/会话级错误,序列化时
     /// 直接不出现这个字段(旧客户端按缺省 None 解析,兼容)。

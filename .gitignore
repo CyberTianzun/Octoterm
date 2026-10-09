@@ -11,6 +11,7 @@ clients/web/test/.launchers.build.mjs
 clients/web/test/.i18n.build.mjs
 clients/web/test/.agents.build.mjs
 clients/web/test/.chat.build.mjs
+clients/web/test/.keys.build.mjs
 
 .DS_Store
 

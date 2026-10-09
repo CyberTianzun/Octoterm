@@ -14,7 +14,10 @@ async fn good_token_gets_hello_ok() {
         .unwrap();
     let (ch, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
     assert_eq!(ch, CONTROL_CHANNEL);
-    assert_eq!(msg.unwrap(), ServerMsg::HelloOk { proto: PROTO_VERSION });
+    assert_eq!(msg.unwrap(), ServerMsg::HelloOk {
+            proto: PROTO_VERSION,
+            os: std::env::consts::OS.to_string(),
+        });
 }
 
 #[tokio::test]
