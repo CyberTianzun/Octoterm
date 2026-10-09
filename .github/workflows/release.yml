@@ -1,22 +1,68 @@
 name: release
+
+# tag 用前缀区分用途:`release-v<semver>` 只给这个 workflow 用,以后别的流程
+# (比如 nightly-*、docs-*)各取各的前缀,互不误触发。
+#   release-v1.2.3        正式版
+#   release-v1.2.3-rc.1   带 `-` 后缀的视为预发布
 on:
   push:
-    tags: ["release-*"]
+    tags: ["release-v[0-9]+.[0-9]+.[0-9]+*"]
+  # 手动触发只构建、上传 Actions 产物,不发 Release:用来在打 tag 前试跑一遍
+  workflow_dispatch:
 
-# 只需要往 Releases 里写产物,不给多余权限
+# 同一个 tag 重复推送时,取消前一次还在跑的
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本号取自 tag:release-v0.1.0 -> v0.1.0;并且必须和各 crate 的 Cargo.toml
+      # 一致,否则 desktop 的 Info.plist 等处会和 Release 名对不上
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            version="${GITHUB_REF_NAME#release-}"
+            expected="${version#v}"
+            for f in crates/*/Cargo.toml; do
+              actual="$(sed -n 's/^version *= *"\(.*\)"/\1/p' "$f" | head -1)"
+              if [ "$actual" != "$expected" ]; then
+                echo "::error file=$f::version 是 $actual,而 tag 是 $GITHUB_REF_NAME(期望 $expected)"
+                exit 1
+              fi
+            done
+          else
+            version="dev-${GITHUB_SHA::7}"
+          fi
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
+
   build:
     name: ${{ matrix.target }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            desktop: true
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
           # arm64 交叉编译,不依赖 ARM runner 的可用性
@@ -26,18 +72,16 @@ jobs:
             apt: gcc-aarch64-linux-gnu
           - target: aarch64-apple-darwin
             os: macos-latest
+            desktop: true
     steps:
       - uses: actions/checkout@v4
-
-      # 版本号取自 tag:release-v0.1.0 -> v0.1.0
-      - name: Resolve version
-        shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#release-}" >> "$GITHUB_ENV"
 
       # web 产物必须先于 cargo build:server 用 rust-embed 把 clients/web/dist/ 编进二进制
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: clients/web/package-lock.json
       - name: Build web client
         working-directory: clients/web
         run: |
@@ -52,72 +96,83 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Install cross linker
-        if: matrix.apt != ''
+        if: matrix.apt
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.apt }}
           echo "CARGO_TARGET_$(echo ${{ matrix.target }} | tr 'a-z-' 'A-Z_')_LINKER=${{ matrix.linker }}" >> "$GITHUB_ENV"
 
-      - name: Build
-        run: cargo build --release -p octoterm-server --target ${{ matrix.target }}
+      - name: Build server
+        run: cargo build --release --target ${{ matrix.target }} -p octoterm-server
 
-      - name: Build desktop (windows/macos only)
-        if: matrix.target == 'x86_64-pc-windows-msvc' || matrix.target == 'aarch64-apple-darwin'
+      # desktop 只支持 Windows/macOS
+      - name: Build desktop
+        if: matrix.desktop
         run: cargo build --release --target ${{ matrix.target }} -p octoterm-desktop
 
       - name: Bundle desktop (macOS)
-        if: matrix.target == 'aarch64-apple-darwin'
-        run: |
-          ./scripts/bundle-macos.sh ${{ matrix.target }}
-          cd target/bundle && zip -r octoterm-desktop-${{ matrix.target }}.zip octoterm.app
+        if: matrix.desktop && runner.os == 'macOS'
+        run: ./scripts/bundle-macos.sh ${{ matrix.target }}
 
       - name: Bundle desktop (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
+        if: matrix.desktop && runner.os == 'Windows'
         shell: cmd
         run: scripts\bundle-windows.bat ${{ matrix.target }}
 
-      # 桌面产物的打包方式和上面 server 的 Package 步骤对称:unix 侧 shasum,
-      # windows 侧 Compress-Archive + Get-FileHash。server 的产物都落在仓库根
-      # 目录,下面既有的 action-gh-release files 通配符是按根目录匹配的(不会
-      # 递归进子目录),所以这里打完包也要挪到根目录,而不是留在 target/bundle/。
-      - name: Package desktop (macOS)
-        if: matrix.target == 'aarch64-apple-darwin'
-        shell: bash
-        run: |
-          name="octoterm-desktop-${{ matrix.target }}"
-          mv "target/bundle/${name}.zip" .
-          shasum -a 256 "${name}.zip" > "${name}.zip.sha256"
-
-      - name: Package desktop (Windows)
-        if: matrix.target == 'x86_64-pc-windows-msvc'
-        shell: pwsh
-        run: |
-          $name = "octoterm-desktop-${{ matrix.target }}"
-          Compress-Archive -Path "target/bundle/octoterm-desktop.exe" -DestinationPath "$name.zip"
-          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
-
+      # 所有产物统一收进 dist/,文件名都带版本号和 target,并各配一个 .sha256
       - name: Package (unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          name="octoterm-${VERSION}-${{ matrix.target }}"
-          tar -czf "${name}.tar.gz" -C "target/${{ matrix.target }}/release" octoterm-server
-          shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          mkdir -p dist
+          server="octoterm-server-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "dist/$server" -C "target/${{ matrix.target }}/release" octoterm-server
+          if [ "${{ matrix.desktop }}" = "true" ]; then
+            desktop="octoterm-desktop-${VERSION}-${{ matrix.target }}.zip"
+            # ditto 保留 .app 的权限位和扩展属性,比 zip -r 可靠
+            ditto -c -k --keepParent target/bundle/octoterm.app "dist/$desktop"
+          fi
+          cd dist && for f in *; do shasum -a 256 "$f" > "$f.sha256"; done
 
       - name: Package (windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $name = "octoterm-$env:VERSION-${{ matrix.target }}"
-          Compress-Archive -Path "target/${{ matrix.target }}/release/octoterm-server.exe" -DestinationPath "$name.zip"
-          (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower() + "  $name.zip" | Out-File -Encoding ascii "$name.zip.sha256"
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Compress-Archive -Path "target/${{ matrix.target }}/release/octoterm-server.exe" `
+            -DestinationPath "dist/octoterm-server-$env:VERSION-${{ matrix.target }}.zip"
+          if ("${{ matrix.desktop }}" -eq "true") {
+            Compress-Archive -Path "target/bundle/octoterm-desktop.exe" `
+              -DestinationPath "dist/octoterm-desktop-$env:VERSION-${{ matrix.target }}.zip"
+          }
+          Get-ChildItem dist -File | ForEach-Object {
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + "  $($_.Name)" |
+              Out-File -Encoding ascii "$($_.FullName).sha256"
+          }
 
-      # 各 job 用同一个 tag 调用:第一个创建 release,其余往里追加产物
+      - uses: actions/upload-artifact@v4
+        with:
+          name: octoterm-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # 只在一个 job 里创建 Release:多个 matrix job 并发调用 action-gh-release
+  # 会抢着建同一个 release,偶发出现重复的草稿或上传失败
+  release:
+    if: github.ref_type == 'tag'
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
-          name: ${{ env.VERSION }}
-          files: |
-            octoterm-*.tar.gz
-            octoterm-*.tar.gz.sha256
-            octoterm-*.zip
-            octoterm-*.zip.sha256
+          name: ${{ needs.prepare.outputs.version }}
+          prerelease: ${{ needs.prepare.outputs.prerelease }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: dist/*
