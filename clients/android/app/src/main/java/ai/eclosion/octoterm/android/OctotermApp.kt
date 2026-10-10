@@ -3,6 +3,7 @@ package ai.eclosion.octoterm.android
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -17,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import ai.eclosion.octoterm.android.i18n.LocaleStore
+import ai.eclosion.octoterm.android.ui.appearance.AppearanceScreen
 import ai.eclosion.octoterm.android.ui.connections.AppScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionEditorScreen
 import ai.eclosion.octoterm.android.ui.connections.ConnectionListScreen
@@ -38,7 +40,8 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
         }
     }
 
-    Box(Modifier.fillMaxSize()) {
+    // Edge-to-edge needs IME insets so the terminal and its keys stay above the keyboard.
+    Box(Modifier.fillMaxSize().imePadding()) {
         when (val screen = state.screen) {
             AppScreen.List -> {
                 ConnectionListScreen(
@@ -58,6 +61,22 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         localePref = pref
                         LocaleStore.apply(pref)
                     },
+                    onAppearance = viewModel::openAppearance,
+                )
+            }
+            AppScreen.Appearance -> {
+                BackHandler(onBack = viewModel::closeAppearance)
+                AppearanceScreen(
+                    appearance = state.appearance,
+                    followsSystem = state.appearanceFollowsSystem,
+                    onFollowSystem = viewModel::followSystemTheme,
+                    onBack = viewModel::closeAppearance,
+                    onFontSize = viewModel::setFontSize,
+                    onFont = viewModel::setFont,
+                    onScrollback = viewModel::setScrollback,
+                    onTheme = viewModel::selectTheme,
+                    onCopy = viewModel::copyAppearance,
+                    onImport = viewModel::importAppearanceFromClipboard,
                 )
             }
             is AppScreen.Editor -> {
@@ -77,30 +96,53 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                 val connection = viewModel.connection(screen.connectionId)
                 if (connection == null) {
                     viewModel.disconnect()
-                } else if (state.attachedId != null) {
-                    TerminalScreen(
+                } else if (state.attachedId != null && viewModel.activeEmulator() != null) {
+                    val activeId = state.attachedId
+                    val emulator = viewModel.activeEmulator()
+                    if (activeId == null || emulator == null) {
+                        viewModel.leaveTerminal()
+                    } else TerminalScreen(
                         title = viewModel.attachedSession()?.name ?: connection.title(),
+                        tabs = viewModel.openTabs(),
+                        activeId = activeId,
                         reconnecting = state.reconnecting,
-                        emulator = viewModel.emulator,
+                        serverOs = state.serverOs,
+                        emulator = emulator,
                         frame = viewModel.painted,
                         generation = state.termGeneration,
-                        onBack = viewModel::closeTerminal,
-                        onInput = viewModel::sendInput,
+                        appearance = state.appearance,
+                        selection = state.selection,
+                        scrollOffset = state.scrollOffset,
+                        mouseTracking = state.mouseTracking,
+                        onBack = viewModel::leaveTerminal,
+                        onFocus = viewModel::openSession,
+                        onCloseTab = viewModel::closeOpenSession,
+                        onInput = { bytes -> viewModel.sendInput(activeId, bytes) },
                         onProposeSize = viewModel::proposeSize,
+                        onScroll = viewModel::scrollBy,
+                        onSelection = viewModel::setSelection,
+                        onMouse = viewModel::sendMouse,
+                        onCopy = viewModel::copySelection,
+                        onPaste = viewModel::pasteClipboard,
+                        onJumpToBottom = viewModel::jumpToBottom,
                     )
                 } else {
                     BackHandler(onBack = viewModel::disconnect)
                     ServerHomeScreen(
                         connection = connection,
                         sessions = state.sessions,
+                        openSessionIds = state.openSessionIds,
                         reconnecting = state.reconnecting,
                         pendingRename = state.pendingRename,
                         renameDraft = state.renameDraft,
+                        launcherMenu = state.launcherMenu,
                         onRenameDraft = viewModel::onRenameDraft,
                         onConfirmRename = viewModel::confirmRename,
                         onDismissRename = viewModel::dismissRename,
                         onBack = viewModel::disconnect,
-                        onNewSession = viewModel::newSession,
+                        onNewSession = viewModel::openLauncherMenu,
+                        onDismissLaunchers = viewModel::dismissLauncherMenu,
+                        onPickLauncher = viewModel::newSession,
                         onOpenSession = viewModel::openSession,
                         onRename = viewModel::requestRename,
                         onKill = viewModel::killSession,
@@ -133,5 +175,8 @@ private fun android.content.Context.messageText(message: UserMessage): String {
         UserMessage.Timeout -> getString(R.string.msg_timeout)
         UserMessage.Closed -> getString(R.string.msg_closed)
         UserMessage.Unexpected -> getString(R.string.msg_unexpected)
+        UserMessage.Copied -> getString(R.string.msg_copied)
+        UserMessage.ImportFailed -> getString(R.string.msg_import_failed)
+        UserMessage.TooManySessions -> getString(R.string.msg_too_many_sessions)
     }
 }

@@ -65,12 +65,18 @@ fun ConnectionListScreen(
     onDismissDelete: () -> Unit,
     localePref: LocalePref,
     onLocalePref: (LocalePref) -> Unit,
+    onAppearance: () -> Unit,
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.servers_title)) },
-                actions = { LanguageMenu(localePref, onLocalePref) },
+                actions = {
+                    TextButton(onClick = onAppearance) {
+                        Text(stringResource(R.string.appearance_action))
+                    }
+                    LanguageMenu(localePref, onLocalePref)
+                },
             )
         },
         floatingActionButton = {

@@ -8,6 +8,7 @@ data class TermFrame(
     val cursorX: Int,
     val cursorY: Int,
     val cursorVisible: Boolean,
+    val scrollOffset: Int = 0,
 ) {
     companion object {
         val Empty = TermFrame(
@@ -20,13 +21,15 @@ data class TermFrame(
         )
 
         fun capture(emulator: VtEmulator): TermFrame {
+            val cursor = emulator.viewportCursor()
             return TermFrame(
                 cells = emulator.snapshot(),
                 cols = emulator.cols,
                 rows = emulator.rows,
-                cursorX = emulator.cursorX,
-                cursorY = emulator.cursorY,
-                cursorVisible = emulator.cursorVisible,
+                cursorX = cursor?.first ?: emulator.cursorX,
+                cursorY = cursor?.second ?: emulator.cursorY,
+                cursorVisible = cursor != null,
+                scrollOffset = emulator.scrollOffset,
             )
         }
     }
@@ -50,6 +53,7 @@ data class TermFrame(
             cursorX == other.cursorX &&
             cursorY == other.cursorY &&
             cursorVisible == other.cursorVisible &&
+            scrollOffset == other.scrollOffset &&
             cells.contentDeepEquals(other.cells)
     }
 
@@ -60,6 +64,7 @@ data class TermFrame(
         result = 31 * result + cursorX
         result = 31 * result + cursorY
         result = 31 * result + cursorVisible.hashCode()
+        result = 31 * result + scrollOffset
         return result
     }
 }

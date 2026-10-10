@@ -68,7 +68,12 @@ pub enum ClientMsg {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum ServerMsg {
-    HelloOk { proto: u32 },
+    /// The server OS selects keyboard encoding; older servers omit it.
+    HelloOk {
+        proto: u32,
+        #[serde(default)]
+        os: String,
+    },
     /// `channel` 有值时表示这个错误是针对某个具体 channel 的操作(attach/
     /// detach/resize/input)失败;省略(None)表示连接级/会话级错误,序列化时
     /// 直接不出现这个字段(旧客户端按缺省 None 解析,兼容)。
@@ -136,6 +141,16 @@ mod tests {
         assert_eq!(json["last_seq"], 42);
         let back: ClientMsg = serde_json::from_value(json).unwrap();
         assert_eq!(back, msg);
+    }
+
+    #[test]
+    fn hello_ok_accepts_old_servers_and_reports_os() {
+        let old: ServerMsg = serde_json::from_str(r#"{"type":"hello-ok","proto":1}"#).unwrap();
+        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new() });
+        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into() };
+        let json = serde_json::to_value(&current).unwrap();
+        assert_eq!(json["os"], "windows");
+        assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), current);
     }
 
     #[test]

@@ -11,6 +11,7 @@ class ConnectionUrlTest {
     fun parsesDaemonStartupLink() {
         val parsed = ConnectionUrl.parse("http://192.168.1.10:7683/#token=s3cret")
         assertEquals("ws://192.168.1.10:7683/ws", parsed.webSocketUrl)
+        assertEquals("http://192.168.1.10:7683", parsed.httpOrigin())
         assertEquals("s3cret", parsed.token)
         assertEquals("192.168.1.10:7683", parsed.displayHost)
         assertFalse(parsed.isLoopback)

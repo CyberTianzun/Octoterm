@@ -47,7 +47,10 @@ object ControlJson {
     fun parse(payload: ByteArray): ServerMsg {
         val obj = JSONObject(String(payload, StandardCharsets.UTF_8))
         return when (val type = obj.optString("type")) {
-            "hello-ok" -> ServerMsg.HelloOk(obj.optInt("proto", PROTO_VERSION))
+            "hello-ok" -> ServerMsg.HelloOk(
+                obj.optInt("proto", PROTO_VERSION),
+                obj.optString("os").takeUnless { it == "null" }.orEmpty(),
+            )
             "error" -> ServerMsg.Error(
                 message = obj.optString("message"),
                 channel = if (obj.has("channel") && !obj.isNull("channel")) obj.getInt("channel") else null,

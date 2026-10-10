@@ -183,8 +183,14 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
 ## 5. Handshake and authentication [H]
 
 - **H1** The first frame after the socket opens MUST be control `hello`.
-- **H2** On match the server replies `hello-ok{proto}`; the connection is then
-  authenticated. No other message is processed before this point.
+- **H2** On match the server replies `hello-ok{proto,os}`; the connection is then
+  authenticated. No other message is processed before this point. `os` is the
+  server's `std::env::consts::OS` (`windows`, `macos`, `linux`, …). Android uses
+  win32-input-mode (`CSI Vk;Sc;Uc;Kd;Cs;Rc _`) for mapped keys on Windows to
+  preserve key identity, modifiers and press/release events through ConPTY.
+  Physical key repeats send key-down; key-up releases the saved key identity.
+  Screen shortcuts synthesize one down/up pair. IME text and clipboard paste
+  use separate text/paste paths. Missing `os` means unknown and retains VT input.
 - **H3** Token or proto mismatch → `error` then close. Token comparison is
   exact string equality.
 - **H4** Non-binary first message → `error` then close.
@@ -247,7 +253,7 @@ runs as the user who started the daemon. The bearer token is the only boundary
 
 | type | fields | when |
 | --- | --- | --- |
-| `hello-ok` | `proto:u32` | handshake accepted |
+| `hello-ok` | `proto:u32`, `os:str` (missing → unknown) | handshake accepted |
 | `error` | `message:str`, `channel:u32?` | §9 |
 | `sessions` | `sessions:[SessionInfo]` | reply to `list-sessions`, sorted by id |
 | `session-event` | `event:SessionEventKind`, `session:SessionInfo` | broadcast on create/rename/close |

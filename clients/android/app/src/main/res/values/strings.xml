@@ -30,9 +30,6 @@
     <string name="editor_warning_loopback">这个地址指向手机自己。请改用电脑的局域网或 Tailscale 地址，不要用 127.0.0.1。</string>
     <string name="editor_warning_wildcard">0.0.0.0 是监听地址，不是连接目标。请改用主机的真实 IP 或域名。</string>
 
-    <string name="server_connected">鉴权成功</string>
-    <string name="server_connected_body">已连上 %1$s。会话列表下一步再做。</string>
-
     <string name="action_save">保存</string>
     <string name="action_cancel">取消</string>
     <string name="action_delete">删除</string>
@@ -47,15 +44,47 @@
     <string name="msg_timeout">服务器没有及时响应</string>
     <string name="msg_closed">鉴权完成前连接就断开了</string>
     <string name="msg_unexpected">服务器返回了意外响应</string>
+    <string name="msg_copied">已复制</string>
+    <string name="msg_import_failed">剪贴板里不是一份外观配置</string>
+    <string name="msg_too_many_sessions">同时打开的会话太多了，先关掉一个</string>
 
     <string name="session_new">新建会话</string>
     <string name="session_empty_title">还没有会话</string>
-    <string name="session_empty_body">点右下角 + 新建一个默认 shell。</string>
+    <string name="session_empty_body">点右下角 +，从启动项里选一个命令。</string>
+    <string name="session_open">已打开</string>
     <string name="session_kill">结束会话</string>
     <string name="session_rename_title">重命名会话</string>
     <string name="session_rename_label">名称</string>
-    <string name="term_keys_hint">点屏幕或「键盘」呼出输入法</string>
+    <string name="term_keys_hint">点一下呼出键盘。上下拖动翻历史，长按选择文字。</string>
+    <string name="term_keys_previous">向左滚动快捷键栏</string>
+    <string name="term_keys_next">向右滚动快捷键栏</string>
     <string name="term_keyboard">键盘</string>
+    <string name="term_copy">复制</string>
+    <string name="term_paste">粘贴</string>
+    <string name="term_jump_bottom">回到底部</string>
+    <string name="term_tab_close">关闭</string>
+
+    <string name="launcher_filter">筛选</string>
+    <string name="launcher_loading">正在读取启动项…</string>
+    <string name="launcher_default_name">默认 shell</string>
+    <string name="launcher_default_detail">由服务器决定跑什么</string>
+    <string name="launcher_provider_builtin">内置</string>
+    <string name="launcher_provider_config">配置文件</string>
+
+    <string name="appearance_action">外观</string>
+    <string name="appearance_title">外观</string>
+    <string name="appearance_theme">主题</string>
+    <string name="appearance_theme_system">跟随系统（%1$s）</string>
+    <string name="appearance_font_size">字号 %1$d</string>
+    <string name="appearance_font">字体</string>
+    <string name="appearance_font_mono">等宽</string>
+    <string name="appearance_font_serif">衬线</string>
+    <string name="appearance_font_sans">无衬线</string>
+    <string name="appearance_scrollback">回滚行数</string>
+    <string name="appearance_scrollback_hint">0 到 200000</string>
+    <string name="appearance_import_hint">导出的 JSON 和网页端是同一份格式。导入会读剪贴板。</string>
+    <string name="appearance_export">复制配置</string>
+    <string name="appearance_import">从剪贴板导入</string>
 
     <string name="locale_action">语言</string>
     <string name="locale_auto">跟随系统</string>

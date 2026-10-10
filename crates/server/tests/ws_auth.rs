@@ -14,7 +14,10 @@ async fn good_token_gets_hello_ok() {
         .unwrap();
     let (ch, msg) = parse_server(ws.next().await.unwrap().unwrap()).unwrap();
     assert_eq!(ch, CONTROL_CHANNEL);
-    assert_eq!(msg.unwrap(), ServerMsg::HelloOk { proto: PROTO_VERSION });
+    assert_eq!(
+        msg.unwrap(),
+        ServerMsg::HelloOk { proto: PROTO_VERSION, os: std::env::consts::OS.to_string() }
+    );
 }
 
 #[tokio::test]
@@ -51,13 +54,14 @@ async fn config_load_reads_existing_and_fills_defaults() {
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "listen = \"0.0.0.0:1234\"\ntoken = \"fixed\"\n").unwrap();
     let c = octoterm_server::config::Config::load(Some(path.clone())).unwrap();
-    assert_eq!(c.listen.to_string(), "0.0.0.0:1234");
+    assert_eq!(c.listen.unwrap().to_string(), "0.0.0.0:1234");
     assert_eq!(c.token.as_deref(), Some("fixed"));
 
     // 部分字段配置:缺省字段自动补全
     std::fs::write(&path, "token = \"only\"\n").unwrap();
     let c = octoterm_server::config::Config::load(Some(path)).unwrap();
-    assert_eq!(c.listen.to_string(), "127.0.0.1:7683");
+    assert_eq!(c.listen, None);
+    assert_eq!(octoterm_server::config::default_listen().to_string(), "127.0.0.1:7683");
     assert_eq!(c.token.as_deref(), Some("only"));
 }
 

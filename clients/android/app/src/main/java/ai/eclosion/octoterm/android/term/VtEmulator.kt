@@ -6,7 +6,7 @@ package ai.eclosion.octoterm.android.term
 class VtEmulator(
     cols: Int = 80,
     rows: Int = 24,
-    private val maxScrollback: Int = 2000,
+    private val maxScrollback: Int = 20_000,
 ) {
     var cols: Int = cols.coerceAtLeast(1)
         private set
@@ -24,6 +24,16 @@ class VtEmulator(
     var bracketedPaste: Boolean = false
         private set
 
+    /** 0 表示贴着最新一行。正数是向上翻了多少行。alt-screen 没有回滚。 */
+    var scrollOffset: Int = 0
+        private set
+
+    var mouseTracking: Boolean = false
+        private set
+    private var mouseDrag: Boolean = false
+    private var mouseAny: Boolean = false
+    private var mouseSgr: Boolean = false
+
     @Volatile
     var generation: Long = 0L
         private set
@@ -38,6 +48,8 @@ class VtEmulator(
 
     private var fg: Int = Color.DEFAULT_FG
     private var bg: Int = Color.DEFAULT_BG
+    private var fgIndex: Int = Color.INDEX_DEFAULT
+    private var bgIndex: Int = Color.INDEX_DEFAULT
     private var attrs: Int = 0
     private var originMode = false
     private var autoWrap = true
@@ -58,8 +70,23 @@ class VtEmulator(
 
     fun snapshot(): Array<Array<Cell>> {
         synchronized(lock) {
-            return Array(rows) { y -> Array(cols) { x -> screen.cell(x, y).copy() } }
+            val off = viewportOffset()
+            return Array(rows) { y -> Array(cols) { x -> screen.cellScrolled(x, y, off).copy() } }
         }
+    }
+
+    /** 光标在当前视口里的位置。翻到历史区时，活光标不在这块网格上。 */
+    fun viewportCursor(): Pair<Int, Int>? {
+        synchronized(lock) {
+            if (!cursorVisible) return null
+            val y = cursorY + viewportOffset()
+            if (y !in 0 until rows || cursorX !in 0 until cols) return null
+            return cursorX to y
+        }
+    }
+
+    fun maxScrollOffset(): Int = synchronized(lock) {
+        if (screen === alternate) 0 else screen.historySize()
     }
 
     fun cell(x: Int, y: Int): Cell = synchronized(lock) { screen.cell(x, y) }
@@ -74,14 +101,25 @@ class VtEmulator(
             cursorVisible = true
             applicationCursor = false
             bracketedPaste = false
+            scrollOffset = 0
+            mode1000 = false
+            mode1002 = false
+            mode1003 = false
+            mouseTracking = false
+            mouseDrag = false
+            mouseAny = false
+            mouseSgr = false
             fg = Color.DEFAULT_FG
             bg = Color.DEFAULT_BG
+            fgIndex = Color.INDEX_DEFAULT
+            bgIndex = Color.INDEX_DEFAULT
             attrs = 0
             originMode = false
             autoWrap = true
             wrapPending = false
             scrollTop = 0
             scrollBottom = rows - 1
+            scrollOffset = 0
             utf8Need = 0
             esc = Ground
             paramCount = 0
@@ -106,6 +144,7 @@ class VtEmulator(
             wrapPending = false
             scrollTop = 0
             scrollBottom = rows - 1
+            scrollOffset = scrollOffset.coerceIn(0, if (screen === alternate) 0 else screen.historySize())
             generation++
         }
         notifyChanged()
@@ -114,9 +153,120 @@ class VtEmulator(
     fun write(bytes: ByteArray) {
         synchronized(lock) {
             for (b in bytes) consume(b.toInt() and 0xff)
+            scrollOffset = scrollOffset.coerceIn(0, if (screen === alternate) 0 else screen.historySize())
             generation++
         }
         notifyChanged()
+    }
+
+    /** 正数往更老的行翻。已经贴底时 delta 为负没有效果。 */
+    fun scrollBy(delta: Int) {
+        if (delta == 0) return
+        synchronized(lock) {
+            if (screen === alternate) return
+            val next = (scrollOffset + delta).coerceIn(0, screen.historySize())
+            if (next == scrollOffset) return
+            scrollOffset = next
+            generation++
+        }
+        notifyChanged()
+    }
+
+    fun scrollToBottom() {
+        synchronized(lock) {
+            if (scrollOffset == 0) return
+            scrollOffset = 0
+            generation++
+        }
+        notifyChanged()
+    }
+
+    fun setMaxScrollback(limit: Int) {
+        synchronized(lock) {
+            primary.setScrollback(limit.coerceIn(0, 200_000))
+            if (screen !== alternate) {
+                scrollOffset = scrollOffset.coerceIn(0, screen.historySize())
+            }
+            generation++
+        }
+        notifyChanged()
+    }
+
+    /**
+     * 把视口里的一块选区收成纯文本。坐标是当前画面上的格子，不是模拟器的绝对行号。
+     * 宽字符只收一次，行尾空格丢掉。
+     */
+    fun copyViewport(x0: Int, y0: Int, x1: Int, y1: Int): String {
+        val cells = snapshot()
+        val height = cells.size
+        val width = cells.firstOrNull()?.size ?: 0
+        if (height == 0 || width == 0) return ""
+        var ax = x0
+        var ay = y0
+        var bx = x1
+        var by = y1
+        if (ay > by || (ay == by && ax > bx)) {
+            ax = x1
+            ay = y1
+            bx = x0
+            by = y0
+        }
+        ay = ay.coerceIn(0, height - 1)
+        by = by.coerceIn(0, height - 1)
+        ax = ax.coerceIn(0, width - 1)
+        bx = bx.coerceIn(0, width - 1)
+        val lines = ArrayList<String>(by - ay + 1)
+        for (y in ay..by) {
+            val row = cells[y]
+            val from = if (y == ay) ax else 0
+            val to = if (y == by) bx else width - 1
+            val sb = StringBuilder()
+            for (x in from..to) {
+                val cell = row[x]
+                if (cell.width == 0) continue
+                sb.append(if (cell.ch == '\u0000') ' ' else cell.ch)
+            }
+            lines.add(sb.toString().trimEnd())
+        }
+        return lines.joinToString("\n")
+    }
+
+    /**
+     * 鼠标上报。返回 null 表示当前模式不该发（没开跟踪，或这次只是移动而模式不要移动）。
+     * col/row 是 0 基的活网格坐标。按下 button=0/1/2，松开 pressed=false，拖动 moving=true。
+     */
+    fun encodePointer(col: Int, row: Int, button: Int, pressed: Boolean, moving: Boolean): ByteArray? {
+        if (!mouseTracking) return null
+        if (moving && !pressed && !mouseAny) return null
+        if (moving && pressed && !mouseDrag && !mouseAny) return null
+        val x = col + 1
+        val y = row + 1
+        if (x < 1 || y < 1) return null
+        val btn = button.coerceIn(0, 2)
+        return if (mouseSgr) {
+            val code = if (moving) btn + 32 else btn
+            val end = if (pressed || moving) 'M' else 'm'
+            "\u001b[<$code;$x;$y$end".toByteArray(Charsets.US_ASCII)
+        } else {
+            if (x > 223 || y > 223) return ByteArray(0)
+            val code = when {
+                moving -> btn + 32
+                !pressed -> 3
+                else -> btn
+            }
+            byteArrayOf(
+                0x1b,
+                '['.code.toByte(),
+                'M'.code.toByte(),
+                (code + 32).toByte(),
+                (x + 32).toByte(),
+                (y + 32).toByte(),
+            )
+        }
+    }
+
+    private fun viewportOffset(): Int {
+        return if (screen === alternate) 0 else scrollOffset
     }
 
     fun encodePaste(text: String): ByteArray {
@@ -342,32 +492,53 @@ class VtEmulator(
 
     private fun setMode(enable: Boolean) {
         if (!decPrivate) return
-        val code = if (paramCount == 0) params[0] else params[0]
-        when (code) {
-            1 -> applicationCursor = enable
-            7 -> {
-                autoWrap = enable
-                if (!enable) wrapPending = false
-            }
-            25 -> cursorVisible = enable
-            2004 -> bracketedPaste = enable
-            47, 1047, 1049 -> {
-                screen = if (enable) {
-                    if (code == 1049) {
-                        savedX = cursorX
-                        savedY = cursorY
+        val count = paramCount.coerceAtLeast(1)
+        for (i in 0 until count) {
+            when (val code = params[i]) {
+                1 -> applicationCursor = enable
+                7 -> {
+                    autoWrap = enable
+                    if (!enable) wrapPending = false
+                }
+                25 -> cursorVisible = enable
+                1000 -> refreshMouse(press = enable, drag = null, any = null, sgr = null)
+                1002 -> refreshMouse(press = null, drag = enable, any = null, sgr = null)
+                1003 -> refreshMouse(press = null, drag = null, any = enable, sgr = null)
+                1006 -> refreshMouse(press = null, drag = null, any = null, sgr = enable)
+                2004 -> bracketedPaste = enable
+                47, 1047, 1049 -> {
+                    screen = if (enable) {
+                        if (code == 1049) {
+                            savedX = cursorX
+                            savedY = cursorY
+                        }
+                        scrollOffset = 0
+                        alternate.reset(cols, rows)
+                        alternate
+                    } else {
+                        if (code == 1049) {
+                            cursorX = savedX.coerceIn(0, cols - 1)
+                            cursorY = savedY.coerceIn(0, rows - 1)
+                        }
+                        primary
                     }
-                    alternate.reset(cols, rows)
-                    alternate
-                } else {
-                    if (code == 1049) {
-                        cursorX = savedX.coerceIn(0, cols - 1)
-                        cursorY = savedY.coerceIn(0, rows - 1)
-                    }
-                    primary
                 }
             }
         }
+    }
+
+    private var mode1000 = false
+    private var mode1002 = false
+    private var mode1003 = false
+
+    private fun refreshMouse(press: Boolean?, drag: Boolean?, any: Boolean?, sgr: Boolean?) {
+        if (press != null) mode1000 = press
+        if (drag != null) mode1002 = drag
+        if (any != null) mode1003 = any
+        if (sgr != null) mouseSgr = sgr
+        mouseDrag = mode1002 || mode1003
+        mouseAny = mode1003
+        mouseTracking = mode1000 || mode1002 || mode1003
     }
 
     private fun sgr() {
@@ -383,6 +554,8 @@ class VtEmulator(
                 0 -> {
                     fg = Color.DEFAULT_FG
                     bg = Color.DEFAULT_BG
+                    fgIndex = Color.INDEX_DEFAULT
+                    bgIndex = Color.INDEX_DEFAULT
                     attrs = 0
                 }
                 1 -> attrs = attrs or Attr.BOLD
@@ -398,14 +571,32 @@ class VtEmulator(
                 27 -> attrs = attrs and Attr.INVERSE.inv()
                 28 -> attrs = attrs and Attr.HIDDEN.inv()
                 29 -> attrs = attrs and Attr.STRIKE.inv()
-                in 30..37 -> fg = Color.ansi(n - 30, bright = false)
+                in 30..37 -> {
+                    fgIndex = n - 30
+                    fg = Color.ansi(n - 30, bright = false)
+                }
                 38 -> i += applyExt(i, fg = true)
-                39 -> fg = Color.DEFAULT_FG
-                in 40..47 -> bg = Color.ansi(n - 40, bright = false)
+                39 -> {
+                    fg = Color.DEFAULT_FG
+                    fgIndex = Color.INDEX_DEFAULT
+                }
+                in 40..47 -> {
+                    bgIndex = n - 40
+                    bg = Color.ansi(n - 40, bright = false)
+                }
                 48 -> i += applyExt(i, fg = false)
-                49 -> bg = Color.DEFAULT_BG
-                in 90..97 -> fg = Color.ansi(n - 90, bright = true)
-                in 100..107 -> bg = Color.ansi(n - 100, bright = true)
+                49 -> {
+                    bg = Color.DEFAULT_BG
+                    bgIndex = Color.INDEX_DEFAULT
+                }
+                in 90..97 -> {
+                    fgIndex = n - 90 + 8
+                    fg = Color.ansi(n - 90, bright = true)
+                }
+                in 100..107 -> {
+                    bgIndex = n - 100 + 8
+                    bg = Color.ansi(n - 100, bright = true)
+                }
             }
             i++
         }
@@ -416,15 +607,28 @@ class VtEmulator(
         return when (params[i + 1]) {
             5 -> {
                 if (i + 2 < paramCount) {
-                    val c = Color.indexed(params[i + 2])
-                    if (fg) this.fg = c else bg = c
+                    val idx = params[i + 2].coerceIn(0, 255)
+                    val c = Color.indexed(idx)
+                    if (fg) {
+                        this.fg = c
+                        fgIndex = idx
+                    } else {
+                        bg = c
+                        bgIndex = idx
+                    }
                 }
                 2
             }
             2 -> {
                 if (i + 4 < paramCount) {
                     val c = Color.rgb(params[i + 2], params[i + 3], params[i + 4])
-                    if (fg) this.fg = c else bg = c
+                    if (fg) {
+                        this.fg = c
+                        fgIndex = Color.INDEX_RGB
+                    } else {
+                        bg = c
+                        bgIndex = Color.INDEX_RGB
+                    }
                 }
                 4
             }
@@ -448,9 +652,9 @@ class VtEmulator(
                 cursorX = (cols - w).coerceAtLeast(0)
             }
         }
-        screen.set(cursorX, cursorY, Cell(ch, fg, bg, attrs, w))
+        screen.set(cursorX, cursorY, Cell(ch, fg, bg, attrs, w, fgIndex, bgIndex))
         if (w == 2 && cursorX + 1 < cols) {
-            screen.set(cursorX + 1, cursorY, Cell(' ', fg, bg, attrs, 0))
+            screen.set(cursorX + 1, cursorY, Cell(' ', fg, bg, attrs, 0, fgIndex, bgIndex))
         }
         cursorX += w
         if (cursorX >= cols) {
@@ -545,6 +749,9 @@ data class Cell(
     val bg: Int,
     val attrs: Int,
     val width: Int,
+    /** -1 默认色，-2 真彩色（用 fg/bg 里的 RGB），0–255 调色板下标。 */
+    val fgIndex: Int = Color.INDEX_DEFAULT,
+    val bgIndex: Int = Color.INDEX_DEFAULT,
 ) {
     companion object {
         fun blank() = Cell(' ', Color.DEFAULT_FG, Color.DEFAULT_BG, 0, 1)
@@ -562,6 +769,8 @@ object Attr {
 }
 
 object Color {
+    const val INDEX_DEFAULT = -1
+    const val INDEX_RGB = -2
     const val DEFAULT_FG = 0x00C0CAF5.toInt()
     const val DEFAULT_BG = 0x001A1B26
     private val ANSI = intArrayOf(
@@ -599,7 +808,7 @@ object Color {
 private class Screen(
     private var cols: Int,
     private var rows: Int,
-    private val scrollback: Int,
+    private var scrollback: Int,
 ) {
     private val lines = ArrayDeque<Array<Cell>>()
 
@@ -628,8 +837,21 @@ private class Screen(
         while (visibleStart() + rows > lines.size) lines.add(blankRow())
     }
 
+    fun historySize(): Int = (lines.size - rows).coerceAtLeast(0)
+
+    fun setScrollback(limit: Int) {
+        scrollback = limit
+        trim()
+    }
+
     fun cell(x: Int, y: Int): Cell {
         val row = lines.getOrNull(visibleStart() + y) ?: return Cell.blank()
+        return row.getOrElse(x) { Cell.blank() }
+    }
+
+    fun cellScrolled(x: Int, y: Int, offset: Int): Cell {
+        val start = visibleStart() - offset.coerceAtLeast(0)
+        val row = lines.getOrNull(start + y) ?: return Cell.blank()
         return row.getOrElse(x) { Cell.blank() }
     }
 

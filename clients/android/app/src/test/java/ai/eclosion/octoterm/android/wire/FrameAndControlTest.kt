@@ -31,6 +31,9 @@ class FrameAndControlTest {
     fun parseHelloOkAndError() {
         val ok = ControlJson.parse("""{"type":"hello-ok","proto":1}""".toByteArray())
         assertEquals(ServerMsg.HelloOk(1), ok)
+        assertEquals(ServerMsg.HelloOk(1, "windows"), ControlJson.parse(
+            """{"type":"hello-ok","proto":1,"os":"windows"}""".toByteArray(),
+        ))
         val err = ControlJson.parse("""{"type":"error","message":"bad hello"}""".toByteArray())
         assertEquals(ServerMsg.Error("bad hello", null), err)
     }

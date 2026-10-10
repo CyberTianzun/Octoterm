@@ -11,7 +11,21 @@ data class ParsedEndpoint(
     val displayHost: String,
     val isLoopback: Boolean,
     val isWildcardBind: Boolean,
-)
+) {
+    /** `GET /api/launchers` 用的源站。WebSocket 地址换成 http(s)，去掉路径。 */
+    fun httpOrigin(): String {
+        val uri = try {
+            URI(webSocketUrl)
+        } catch (_: Exception) {
+            return ""
+        }
+        val scheme = if (uri.scheme == "wss") "https" else "http"
+        val host = uri.host ?: return ""
+        val hostForUrl = if (host.contains(':') && !host.startsWith("[")) "[$host]" else host
+        val port = if (uri.port > 0) ":${uri.port}" else ""
+        return "$scheme://$hostForUrl$port"
+    }
+}
 
 class ConnectionUrlException(message: String) : IllegalArgumentException(message)
 
