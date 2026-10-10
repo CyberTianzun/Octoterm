@@ -79,6 +79,9 @@ cwd = "~/work"                # 可选
 cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 ```
 
+使用 `--host 0.0.0.0` 时,启动日志会列出回环地址及所有已连接网卡的 IPv4 访问链接
+(含 token),包括局域网和 VPN 地址。
+
 对外监听请自行保证网络层安全(Tailscale / 反向代理 + TLS)。
 
 ## 桌面客户端(Windows / macOS)

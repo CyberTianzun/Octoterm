@@ -3,6 +3,8 @@ use octoterm_server::app::{serve, AppState};
 use octoterm_server::config::{Config, WindowSize};
 use octoterm_server::session::manager::SessionManager;
 
+mod connection_urls;
+
 #[derive(clap::Subcommand)]
 enum Cmd {
     /// agent 的 hook 回调客户端(由装进 agent 配置里的 hook 调用,不是给人敲的)。
@@ -61,22 +63,17 @@ async fn main() -> anyhow::Result<()> {
     let manager = SessionManager::new(1 << 20, args.window_size.unwrap_or(config.window_size));
     let launchers = std::sync::Arc::new(octoterm_server::launcher::providers(&config.launchers));
     let listener = tokio::net::TcpListener::bind(listen).await?;
+    let listen = listener.local_addr()?;
 
-    // Jupyter 式:每次启动打印可直接点开的访问 URL(0.0.0.0/:: 显示为 127.0.0.1)
-    let ip = listen.ip();
-    let host_part = if ip.is_unspecified() {
-        "127.0.0.1".to_string()
-    } else if ip.is_ipv6() {
-        format!("[{ip}]")
-    } else {
-        ip.to_string()
-    };
+    // Jupyter 式:每次启动打印可直接点开的访问 URL;IPv4 全网卡监听时列出各网卡地址。
     eprintln!("octoterm-server listening on {listen}");
-    eprintln!("    http://{host_part}:{}/#token={token}", listen.port());
+    for url in connection_urls::connection_urls(listen, &token) {
+        eprintln!("    {url}");
+    }
     if generated {
         eprintln!("    (token 为本次启动随机生成;用 --token 或配置文件可固定)");
     }
-    let listen_port = listener.local_addr()?.port();
+    let listen_port = listen.port();
     let agents = config.agents;
     let agent_sessions = std::sync::Arc::new(octoterm_server::agent::store::AgentSessionStore::new());
     serve(listener, AppState { manager, token, launchers, listen_port, agents, agent_sessions }).await

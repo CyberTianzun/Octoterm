@@ -90,6 +90,9 @@ devices, override on the command line (takes precedence over the config file):
 cargo run -p octoterm-server -- --host 0.0.0.0 --port 9000
 ```
 
+With `--host 0.0.0.0`, startup logs list token-bearing URLs for localhost and
+each IPv4 address on an active network interface, including LAN and VPN addresses.
+
 When exposing it beyond localhost, bring your own network-layer security
 (Tailscale / reverse proxy + TLS).
 
