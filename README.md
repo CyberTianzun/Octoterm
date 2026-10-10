@@ -18,8 +18,7 @@ memory-frugal standalone terminal server**.
 
 That is octoterm's entire positioning. And unlike tmux, its GUI is not a pure
 in-terminal UI: sessions are exposed through a client-neutral wire protocol, so
-you can operate them from a browser today, and from phones and native apps
-tomorrow.
+you can operate them from a browser or the native Android client.
 
 ## Philosophy
 
@@ -135,6 +134,29 @@ settings window, or put your own network-layer security in front of it.
 
 Linux is not supported.
 
+## Android client
+
+`clients/android` is a native Kotlin + Jetpack Compose client with connection
+management, server launchers, multiple sessions, scrollback and text selection.
+The UI and terminal follow the system using `2026 Light` / `2026 Dark`. The
+terminal viewport shrinks above the soft keyboard, and shortcut keys scroll
+horizontally.
+
+For Windows servers, the keyboard adapter preserves key identity and modifiers
+for Shift+Enter, Ctrl+J, Alt+arrows and other combinations. The shortcut bar
+includes Esc, Ctrl+C, arrows, Home, End and PgUp/PgDn.
+
+Build with JDK 17 and Android SDK 36, or open `clients/android` in Android Studio:
+
+```sh
+cd clients/android
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Use `gradlew.bat` on Windows. After installation, add the server address and
+token, or import the server access URL from the clipboard.
+
 ## Architecture
 
 Wire protocol: [`docs/protocol.md`](docs/protocol.md) — the normative spec, and
@@ -146,14 +168,15 @@ the checklist any protocol change has to pass. Background and rationale:
 - `crates/client-core` — reusable logic for Rust clients
 - `crates/desktop` — tray-resident GUI with the server embedded (Windows / macOS)
 - `clients/web` — reference client (TypeScript + xterm.js)
+- `clients/android` — native Android terminal client (Kotlin + Jetpack Compose)
 
 ## Roadmap
 
-octoterm is currently an **experimental demo**, with the browser client as the
-only finished surface.
+octoterm is currently an **experimental demo**, with browser and native Android
+clients available.
 
 1. **More terminal capability, more clients.** Deepen core terminal features,
-   then bring the same protocol to mobile — iOS and Android clients.
+   continue improving Android, and bring the same protocol to iOS and other platforms.
 2. **Agent integration.** A hosted session lets you take over an agent's
    prompts, answer its choices, and check its status from any device.
    **Claude Code works today** (hook install, live session state, remote

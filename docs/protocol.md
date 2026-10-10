@@ -203,6 +203,11 @@ Launcher { id:str, provider:str, name:str, detail:str, command:[str], cwd:str? }
   Clipboard and browser shortcuts retain their browser default actions; keys
   reserved by the browser or OS cannot be forwarded if no DOM event is delivered.
   Missing `os` (older servers) means unknown: keep the plain VT encoding.
+  Android uses the same Windows encoding for mapped hardware keys, and its
+  screen shortcuts synthesize one key-down/key-up pair. Hardware key releases
+  retain the identity saved at key-down; focus loss and session changes release
+  tracked keys, while disconnection clears their state. IME text commits are
+  UTF-8 input, separate from clipboard paste and its bracketed-paste framing.
 - **H3** Token or proto mismatch → `error` then close. Token comparison is
   exact string equality.
 - **H4** Non-binary first message → `error` then close.

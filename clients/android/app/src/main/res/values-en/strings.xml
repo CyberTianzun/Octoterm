@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Octoterm</string>
+
+    <string name="servers_title">Servers</string>
+    <string name="servers_add">Add server</string>
+    <string name="servers_add_clipboard">Add from clipboard</string>
+    <string name="servers_add_manual">Add manually</string>
+    <string name="servers_add_manual_hint">Enter the URL and token yourself</string>
+    <string name="servers_more">More options</string>
+    <string name="servers_empty_title">No servers yet</string>
+    <string name="servers_empty_body">Add a server URL to connect. You can paste the link the daemon prints on startup.</string>
+    <string name="servers_delete_title">Delete server?</string>
+    <string name="servers_delete_body">Remove %1$s from this device? This does not stop the server.</string>
+
+    <string name="editor_title_add">Add server</string>
+    <string name="editor_title_edit">Edit server</string>
+    <string name="editor_url">Server URL</string>
+    <string name="editor_url_hint">Example: http://192.168.1.10:7683/#token=…</string>
+    <string name="editor_url_empty">Enter a server URL</string>
+    <string name="editor_url_bad">That does not look like a valid URL</string>
+    <string name="editor_token">Token</string>
+    <string name="editor_token_hint">Filled automatically if the URL contains #token=</string>
+    <string name="editor_token_empty">A token is required to authenticate</string>
+    <string name="editor_token_show">Show</string>
+    <string name="editor_token_hide">Hide</string>
+    <string name="editor_name">Name</string>
+    <string name="editor_name_hint">Optional label for this server</string>
+    <string name="editor_paste_clipboard">Use URL from clipboard</string>
+    <string name="editor_warning_loopback">This address points at the phone itself. Use your computer’s LAN or Tailscale address instead of 127.0.0.1.</string>
+    <string name="editor_warning_wildcard">0.0.0.0 is a listen address, not a destination. Use the host’s real IP or name.</string>
+
+    <string name="action_save">Save</string>
+    <string name="action_cancel">Cancel</string>
+    <string name="action_delete">Delete</string>
+    <string name="action_edit">Edit</string>
+    <string name="action_back">Back</string>
+
+    <string name="msg_saved">Server saved</string>
+    <string name="msg_deleted">Server removed</string>
+    <string name="msg_auth_failed">The server rejected this token</string>
+    <string name="msg_auth_failed_detail">The server rejected this token: %1$s</string>
+    <string name="msg_unreachable">Could not reach the server. Check the URL and network.</string>
+    <string name="msg_timeout">The server did not respond in time</string>
+    <string name="msg_closed">The connection closed before authentication finished</string>
+    <string name="msg_unexpected">Unexpected response from the server</string>
+    <string name="msg_copied">Copied</string>
+    <string name="msg_import_failed">The clipboard is not an appearance config</string>
+    <string name="msg_too_many_sessions">Too many sessions are open. Close one first.</string>
+
+    <string name="session_new">New session</string>
+    <string name="session_empty_title">No sessions yet</string>
+    <string name="session_empty_body">Tap + and pick a launcher.</string>
+    <string name="session_open">Open</string>
+    <string name="session_kill">Kill session</string>
+    <string name="session_rename_title">Rename session</string>
+    <string name="session_rename_label">Name</string>
+    <string name="term_keys_hint">Tap for the keyboard. Drag to scroll history, long-press to select.</string>
+    <string name="term_keys_previous">Scroll shortcut keys left</string>
+    <string name="term_keys_next">Scroll shortcut keys right</string>
+    <string name="term_keyboard">Keyboard</string>
+    <string name="term_copy">Copy</string>
+    <string name="term_paste">Paste</string>
+    <string name="term_jump_bottom">Jump to bottom</string>
+    <string name="term_tab_close">Close</string>
+
+    <string name="launcher_filter">Filter</string>
+    <string name="launcher_loading">Loading launchers…</string>
+    <string name="launcher_default_name">Default shell</string>
+    <string name="launcher_default_detail">The server picks the command</string>
+    <string name="launcher_provider_builtin">Built-in</string>
+    <string name="launcher_provider_config">Config file</string>
+
+    <string name="appearance_action">Appearance</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="appearance_theme">Theme</string>
+    <string name="appearance_theme_system">Follow system (%1$s)</string>
+    <string name="appearance_font_size">Font size %1$d</string>
+    <string name="appearance_font">Font</string>
+    <string name="appearance_font_mono">Monospace</string>
+    <string name="appearance_font_serif">Serif</string>
+    <string name="appearance_font_sans">Sans</string>
+    <string name="appearance_scrollback">Scrollback</string>
+    <string name="appearance_scrollback_hint">0 to 200000</string>
+    <string name="appearance_import_hint">The exported JSON is the same format as the web client. Import reads the clipboard.</string>
+    <string name="appearance_export">Copy config</string>
+    <string name="appearance_import">Import from clipboard</string>
+
+    <string name="locale_action">Language</string>
+    <string name="locale_auto">Follow system</string>
+</resources>

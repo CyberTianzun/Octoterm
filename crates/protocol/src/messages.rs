@@ -147,6 +147,16 @@ mod tests {
     }
 
     #[test]
+    fn hello_ok_accepts_old_servers_and_reports_os() {
+        let old: ServerMsg = serde_json::from_str(r#"{"type":"hello-ok","proto":1}"#).unwrap();
+        assert_eq!(old, ServerMsg::HelloOk { proto: 1, os: String::new() });
+        let current = ServerMsg::HelloOk { proto: 1, os: "windows".into() };
+        let json = serde_json::to_value(&current).unwrap();
+        assert_eq!(json["os"], "windows");
+        assert_eq!(serde_json::from_value::<ServerMsg>(json).unwrap(), current);
+    }
+
+    #[test]
     fn fixtures_roundtrip() {
         let raw = include_str!("../fixtures/client-msgs.json");
         let msgs: Vec<ClientMsg> = serde_json::from_str(raw).unwrap();

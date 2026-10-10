@@ -14,8 +14,7 @@ tmux 的内核(进程 + IO + 屏幕状态托管)单独拿出来,把窗口管理�
 server**。
 
 这就是 octoterm 的全部定位。与 tmux 不同,它的 GUI 不是纯终端界面:会话通过
-客户端中立的通讯协议暴露,今天可以在浏览器上操作,将来可以在手机和原生应用上
-操作。
+客户端中立的通讯协议暴露,可以在浏览器或 Android 原生客户端中操作。
 
 ## 哲学
 
@@ -113,6 +112,26 @@ cargo run -p octoterm-desktop
 
 不支持 Linux。
 
+## Android 客户端
+
+`clients/android` 是 Kotlin + Jetpack Compose 原生客户端,支持连接管理、服务端
+启动项、多个会话、回滚与文字选择。界面和终端默认随系统切换 `2026 Light` /
+`2026 Dark`;软键盘弹出时缩小终端视口,快捷键栏可左右滑动。
+
+连接 Windows 服务端时,键盘适配层保留 Shift+Enter、Ctrl+J、Alt+方向键等组合键
+的身份与修饰状态。快捷栏包含 Esc、Ctrl+C、方向键、Home、End、PgUp/PgDn 等。
+
+使用 JDK 17 和 Android SDK 36 构建,或用 Android Studio 打开 `clients/android`:
+
+```sh
+cd clients/android
+./gradlew :app:assembleDebug :app:testDebugUnitTest
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+Windows 使用 `gradlew.bat`。安装后添加服务端地址和 token,也可以从剪贴板导入
+服务端访问 URL。
+
 ## 架构
 
 通信协议规范:[`docs/protocol.md`](docs/protocol.md) —— 线上格式的规范性定义,
@@ -124,13 +143,14 @@ cargo run -p octoterm-desktop
 - `crates/client-core` — Rust 客户端复用逻辑
 - `crates/desktop` — 内嵌 server 的托盘常驻 GUI(Windows / macOS)
 - `clients/web` — 参考客户端(TS + xterm.js)
+- `clients/android` — Android 原生终端客户端(Kotlin + Jetpack Compose)
 
 ## 路线图
 
-octoterm 目前是**实验性 demo**,已完成的界面只有浏览器端。
+octoterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客户端。
 
-1. **更多终端能力、更多客户端**:深化核心终端功能,然后把同一套协议带到移动
-   端——iOS 与 Android 客户端;
+1. **更多终端能力、更多客户端**:深化核心终端功能,继续完善 Android 客户端,
+   并把同一套协议带到 iOS 等平台;
 2. **Agent 集成**:让被托管的会话可以在任何设备上接管 AI 的提示、回答它的选择、
    查看它的状态。**Claude Code 已可用**(装 hook、会话状态、远程授权);Codex、pi
    等其他 agent 在后续版本;
