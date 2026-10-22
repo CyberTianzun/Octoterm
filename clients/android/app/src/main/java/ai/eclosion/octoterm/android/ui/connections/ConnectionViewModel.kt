@@ -454,6 +454,7 @@ class ConnectionViewModel(
     }
 
     fun disconnect() {
+        android.util.Log.i("OctotermPush", "Terminal connection disconnected")
         pendingOpen.onDisconnect()
         resetChat()
         agentJob?.cancel()

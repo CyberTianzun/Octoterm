@@ -87,6 +87,7 @@ object PushRegistrar {
             }
             context.getSharedPreferences("push", Context.MODE_PRIVATE).edit().putString("provider", provider).apply()
             account.registerPushTarget(provider, token)
+            Log.i("OctotermPush", "Cloud push registration refreshed: $provider")
             _state.value = if (provider == "aliyun") PushRegistration.RegisteredAliyun else PushRegistration.Registered
         } catch (e: Exception) {
             _failureCode.value = (e as? AliyunPushException)?.code
