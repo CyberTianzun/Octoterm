@@ -309,7 +309,9 @@ fn our_url(hook: &Value) -> Option<OurUrl> {
 /// 从命令串里挑出我们的 URL。命令串形如
 /// `"/path/to/octoterm-server" hook http://127.0.0.1:7683/hook/codex/stop`,
 /// 按空白切开找那个 token 就够了 —— URL 里不会有空白。
-fn url_in_command(cmd: &str) -> Option<String> {
+pub(crate) fn url_in_command(cmd: &str) -> Option<String> {
+    let decoded = super::hook_cli::decode_windows_command(cmd);
+    let cmd = decoded.as_deref().unwrap_or(cmd);
     cmd.split_whitespace()
         .map(|t| t.trim_matches(|c| c == '"' || c == '\''))
         .find(|t| t.starts_with("http://127.0.0.1:"))

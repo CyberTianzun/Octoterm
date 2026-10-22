@@ -247,6 +247,9 @@ octoterm 目前是**实验性 demo**,已提供浏览器端和 Android 原生客�
    `~/.grok/hooks/octoterm.json` 支持(状态与聊天视图;它同样没有授权审批事件);
    **Antigravity CLI**(Google 的 `agy`)通过共用的 `~/.gemini/config/hooks.json` 里的
    `octoterm` 条目支持(状态与聊天视图;不接管它的授权确认);
+   该适配针对独立的 Antigravity CLI，与 Gemini CLI 和 Antigravity IDE 分开处理。
+   从旧 Windows 版本升级后，需要在设置中重新安装 Antigravity 集成，再重启正在运行的
+   `agy`，替换旧 hook 命令。聊天视图读取 Antigravity 的步骤日志，包含新版 CLI 的思考内容。
 3. **不做文件管理**:文件管理基本不可能加——那是会话里 shell 自己的事。
 
 ## 已知限制

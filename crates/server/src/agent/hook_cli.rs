@@ -30,20 +30,74 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// 写进 agent 配置里的命令串。Windows Codex 使用 PowerShell,带引号的程序路径
 /// 必须通过 `&` 调用;单引号同时避免路径里的 `$` / 反引号被展开。
-/// Grok 及其他平台保留原来的 shell 语法。
+/// Antigravity 的 Windows cmd.exe 转义另行处理;Grok 及其他平台保留原来的 shell 语法。
 ///
 /// 二进制路径用 `current_exe()`,跟着安装位置走 —— 换了地方放二进制就得重装,
 /// 自检会把它报成 `Outdated`(见 `edit::is_current`)。
 pub fn command_for(agent: &str, port: u16, event: &str) -> String {
     let exe = std::env::current_exe()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_else(|_| "octoterm-server".into());
+        .unwrap_or_else(|_| std::path::PathBuf::from("octoterm-server"));
+    command_for_executable(agent, port, event, &exe)
+}
+
+/// Explicit executable path also lets shell integration tests cover installed paths.
+pub fn command_for_executable(agent: &str, port: u16, event: &str, exe: &std::path::Path) -> String {
+    let exe = exe.to_string_lossy();
     let url = format!("http://127.0.0.1:{port}/hook/{agent}/{}", super::edit::slug_of_event(event));
-    if cfg!(windows) && agent == "codex" {
+    if cfg!(windows) && agent == "antigravity" {
+        windows_antigravity_command(&exe, &url)
+    } else if cfg!(windows) && agent == "codex" {
         format!("& '{}' hook {url}", exe.replace('\'', "''"))
     } else {
         format!("\"{exe}\" hook {url}")
     }
+}
+
+const WINDOWS_COMMAND_PREFIX: &str =
+    "powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ";
+
+fn windows_antigravity_command(exe: &str, url: &str) -> String {
+    use base64::Engine;
+    // agy uses Go's exec.Command("cmd.exe", "/C", command). Quotes inside that
+    // single argument become literal \" on Windows. Keep the outer command free
+    // of shell punctuation and quote the installed path inside the encoded script.
+    // Copy stdin as bytes: PowerShell's native pipeline would re-encode JSON and
+    // add a newline. Antigravity requires {} even when telemetry is unavailable.
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         $ProgressPreference = 'SilentlyContinue'\n\
+         $url = '{url}'\n\
+         if (-not $env:OCTOTERM_SESSION_ID -or -not $env:OCTOTERM_HOOK_TOKEN) {{ [Console]::Out.Write('{{}}'); exit 0 }}\n\
+         $p = [System.Diagnostics.Process]::new()\n\
+         $p.StartInfo.FileName = '{}'\n\
+         $p.StartInfo.Arguments = 'hook ' + $url\n\
+         $p.StartInfo.UseShellExecute = $false\n\
+         $p.StartInfo.RedirectStandardInput = $true\n\
+         $p.StartInfo.RedirectStandardOutput = $true\n\
+         $p.StartInfo.CreateNoWindow = $true\n\
+         [void]$p.Start()\n\
+         [Console]::OpenStandardInput().CopyTo($p.StandardInput.BaseStream)\n\
+         $p.StandardInput.Close()\n\
+         $reply = $p.StandardOutput.ReadToEnd()\n\
+         $p.WaitForExit()\n\
+         if ([string]::IsNullOrWhiteSpace($reply)) {{ $reply = '{{}}' }}\n\
+         [Console]::Out.Write($reply)\n\
+         exit $p.ExitCode\n",
+        exe.replace('\'', "''"),
+    );
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    format!("{WINDOWS_COMMAND_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// Decode only our generated wrapper, for ownership/port/version checks. Never execute it.
+pub(crate) fn decode_windows_command(command: &str) -> Option<String> {
+    use base64::Engine;
+    let encoded = command.strip_prefix(WINDOWS_COMMAND_PREFIX)?;
+    if encoded.len() > 32_768 { return None; }
+    let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).ok()?;
+    if bytes.len() % 2 != 0 { return None; }
+    let words: Vec<u16> = bytes.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
+    String::from_utf16(&words).ok()
 }
 
 /// 返回进程退出码。永远是 0 —— 见模块文档第 2 条。

@@ -80,7 +80,7 @@ impl AgentAdapter for Antigravity {
     }
 
     fn name(&self) -> &'static str {
-        "Antigravity"
+        "Antigravity CLI"
     }
 
     fn detect(&self, env: &DetectEnv) -> Detected {
@@ -144,11 +144,14 @@ impl AgentAdapter for Antigravity {
     }
 
     fn parse(&self, event: &str, body: &Value) -> Option<Update> {
+        // Gemini CLI's session_id payload is a different protocol. A real agy
+        // hook carries conversationId on every event; never invent "default".
+        self.agent_session_id(body)?;
         let (state, detail) = match event {
             "SessionStart" | "Stop" => (AgentState::Idle, None),
             "PreInvocation" => (AgentState::Thinking, None),
             "PostToolUse" => (
-                AgentState::Working,
+                if str_field(body, "error").is_some() { AgentState::Error } else { AgentState::Working },
                 body.pointer("/toolCall/name").and_then(Value::as_str).map(str::to_string),
             ),
             _ => return None,
@@ -209,5 +212,6 @@ impl AgentAdapter for Antigravity {
 fn is_our_shape(hook: &Value) -> bool {
     hook.get("command")
         .and_then(Value::as_str)
-        .is_some_and(|c| c.contains("http://127.0.0.1:") && c.contains("/hook/antigravity/"))
+        .and_then(super::edit::url_in_command)
+        .is_some_and(|url| url.contains("/hook/antigravity/"))
 }

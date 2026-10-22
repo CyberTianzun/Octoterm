@@ -7,7 +7,7 @@ mod common;
 use octoterm_server::agent::apply::{apply, ApplyError, ApplyOpts};
 use octoterm_server::agent::antigravity_transcript::{locate, parse};
 use octoterm_server::agent::detect::DetectEnv;
-use octoterm_server::agent::edit::InstallCtx;
+use octoterm_server::agent::edit::{InstallCtx, is_ours};
 use octoterm_server::agent::store::hook_token;
 use octoterm_server::agent::transcript::{Block, Role};
 use octoterm_server::agent::{find, plan_purge, scan, Integration};
@@ -67,10 +67,10 @@ fn installs_as_one_named_entry_in_the_shared_file() {
     assert_eq!(doc["lint"], theirs["lint"]);
     let ours = &doc["octoterm"];
     // 平铺事件直接是处理器列表;工具事件要包 {matcher, hooks}
-    assert!(ours["SessionStart"][0]["command"].as_str().unwrap().contains("/hook/antigravity/session-start"));
+    assert!(is_ours(&ours["SessionStart"][0], 7683));
     assert!(ours["Stop"][0]["command"].is_string());
     assert_eq!(ours["PostToolUse"][0]["matcher"], "*");
-    assert!(ours["PostToolUse"][0]["hooks"][0]["command"].as_str().unwrap().contains("/hook/antigravity/post-tool-use"));
+    assert!(is_ours(&ours["PostToolUse"][0]["hooks"][0], 7683));
 }
 
 /// 实测:PreToolUse 的回复里没有 decision 时 agy 直接拒绝工具调用;能填的 decision 又都会
@@ -146,6 +146,79 @@ fn parses_payloads() {
     assert!(a.parse("PostInvocation", &body).is_none());
 }
 
+#[test]
+fn gemini_cli_hook_payload_is_not_an_antigravity_session() {
+    let a = find("antigravity").unwrap();
+    let body = json!({"session_id":"gemini-session", "cwd":"/w", "transcript_path":"/tmp/gemini.json"});
+    assert!(a.agent_session_id(&body).is_none());
+    assert!(a.parse("SessionStart", &body).is_none());
+    assert!(a.parse("PreInvocation", &body).is_none());
+}
+
+#[test]
+fn tool_errors_are_reported_and_next_invocation_clears_error() {
+    let a = find("antigravity").unwrap();
+    let body = json!({"conversationId":"c-1", "toolCall":{"name":"run_command"}, "error":"exit status 1"});
+    let update = a.parse("PostToolUse", &body).unwrap();
+    assert_eq!(update.state, Some(AgentState::Error));
+    assert_eq!(update.detail.as_deref(), Some("run_command"));
+    assert_eq!(a.parse("PreInvocation", &body).unwrap().state, Some(AgentState::Thinking));
+}
+
+#[test]
+fn gemini_cli_and_antigravity_ide_files_do_not_identify_antigravity_cli() {
+    let e = env();
+    fs::create_dir_all(e.home.path().join(".gemini/antigravity/brain")).unwrap();
+    fs::write(e.home.path().join(".gemini/settings.json"), r#"{"model":"gemini"}"#).unwrap();
+    let env = DetectEnv { home: e.home.path().to_path_buf(), path: None };
+    let a = find("antigravity").unwrap();
+    assert_eq!(a.name(), "Antigravity CLI");
+    assert!(!a.detect(&env).installed);
+    fs::create_dir_all(e.home.path().join(".gemini/antigravity-cli")).unwrap();
+    fs::write(e.home.path().join(".gemini/antigravity-cli/installation_id"), "test").unwrap();
+    assert!(a.detect(&env).installed);
+}
+
+#[cfg(windows)]
+#[test]
+fn replaces_legacy_quoted_commands_and_recognizes_the_encoded_install() {
+    let e = env();
+    e.seed(&json!({"octoterm":{"Stop":[{"type":"command", "command":
+        "\"C:\\Old Octoterm\\octoterm-desktop.exe\" hook http://127.0.0.1:7683/hook/antigravity/stop"}]}}));
+    assert_eq!(e.integration(7683), Integration::Outdated);
+    e.install(7683).unwrap();
+    assert_eq!(e.integration(7683), Integration::Installed);
+    assert_eq!(e.integration(9999), Integration::StalePort);
+    e.uninstall();
+    assert!(e.doc().get("octoterm").is_none());
+}
+
+#[test]
+fn newer_transcript_includes_thinking_and_skips_unfinished_tool_results() {
+    let text = concat!(
+        "{\"step_index\":0,\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"Inspect the file first.\",\"tool_calls\":[{\"name\":\"read_file\",\"args\":{\"path\":\"README.md\"}}]}\n",
+        "{\"step_index\":1,\"type\":\"GENERIC\",\"status\":\"RUNNING\",\"content\":\"Still running\"}\n",
+        "{\"step_index\":2,\"type\":\"PLANNER_RESPONSE\",\"thinking\":\"Consider the result.\",\"content\":\"Done.\"}\n"
+    );
+    let messages = parse(text, 0);
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(&messages[0].blocks[0], Block::Thinking { text } if text == "Inspect the file first."));
+    assert!(matches!(&messages[0].blocks[1], Block::ToolUse { name, input } if name == "read_file" && input == "README.md"));
+    assert!(matches!(&messages[1].blocks[1], Block::Text { text } if text == "Done."));
+    assert_eq!(messages[1].id, "step-2");
+}
+
+#[test]
+fn transcript_locator_accepts_the_documented_filename_without_full_log() {
+    let e = env();
+    let logs = e.home.path().join(".gemini/antigravity-cli/brain/c-1/.system_generated/logs");
+    fs::create_dir_all(&logs).unwrap();
+    fs::write(logs.join("transcript.jsonl"), "").unwrap();
+    assert_eq!(locate(e.home.path(), "c-1"), Some(logs.join("transcript.jsonl")));
+    fs::write(logs.join("transcript_full.jsonl"), "").unwrap();
+    assert_eq!(locate(e.home.path(), "c-1"), Some(logs.join("transcript_full.jsonl")));
+}
+
 /// agy 要求每个 hook 都在 stdout 输出 JSON 对象:状态事件经路由回 `{}`,不是空 body。
 #[tokio::test]
 async fn hook_route_replies_with_an_empty_json_object() {
@@ -160,6 +233,55 @@ async fn hook_route_replies_with_an_empty_json_object() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert_eq!(r.text().await.unwrap(), "{}");
+}
+
+#[tokio::test]
+async fn installed_hooks_link_terminal_state_and_chat_messages() {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
+    let e = env();
+    let transcript = e.home.path().join("transcript.jsonl");
+    fs::write(&transcript, format!("{FIXTURE}\n{}\n", json!({
+        "step_index": 5, "type": "PLANNER_RESPONSE", "thinking": "Review the result."
+    }))).unwrap();
+    let addr = common::start_test_server_at("tok", 1 << 16, Default::default(), vec![]).await;
+    let client = reqwest::Client::new();
+    let body = json!({
+        "conversationId": "agy-live", "workspacePaths": [e.home.path()],
+        "transcriptPath": transcript, "toolCall": {"name": "view_file", "args": {}}
+    });
+    for (event, expected) in [("SessionStart", "idle"), ("PreInvocation", "thinking"),
+        ("PostToolUse", "working"), ("Stop", "idle")] {
+        let command = octoterm_server::agent::hook_cli::command_for_executable(
+            "antigravity", addr.port(), event, std::path::Path::new(env!("CARGO_BIN_EXE_octoterm-server")));
+        let mut shell = if cfg!(windows) {
+            let mut command = tokio::process::Command::new("cmd.exe"); command.arg("/C"); command
+        } else {
+            let mut command = tokio::process::Command::new("sh"); command.arg("-c"); command
+        };
+        let mut child = shell.arg(command)
+            .env("OCTOTERM_SESSION_ID", "21").env("OCTOTERM_HOOK_TOKEN", hook_token())
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped())
+            .kill_on_drop(true).spawn().unwrap();
+        child.stdin.take().unwrap().write_all(body.to_string().as_bytes()).await.unwrap();
+        let output = tokio::time::timeout(std::time::Duration::from_secs(15), child.wait_with_output()).await.unwrap().unwrap();
+        assert!(output.status.success(), "{event}: {:?}", output.stderr);
+        assert_eq!(output.stdout, b"{}");
+        let snapshot: Value = client.get(format!("http://{addr}/api/agents/sessions"))
+            .bearer_auth("tok").send().await.unwrap().json().await.unwrap();
+        let session = &snapshot["sessions"][0];
+        assert_eq!(session["agent_id"], "antigravity");
+        assert_eq!(session["agent_session_id"], "agy-live");
+        assert_eq!(session["session"], 21);
+        assert_eq!(session["state"], expected);
+        assert_eq!(session["supports_transcript"], true);
+    }
+    let chat: Value = client.get(format!("http://{addr}/api/agents/messages?agent_id=antigravity&agent_session_id=agy-live"))
+        .bearer_auth("tok").send().await.unwrap().json().await.unwrap();
+    assert_eq!(chat["source"], "transcript");
+    let messages = chat["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 6);
+    assert_eq!(messages[5]["blocks"][0]["kind"], "thinking");
 }
 
 #[test]

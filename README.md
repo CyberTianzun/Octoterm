@@ -301,6 +301,11 @@ clients available.
    (Google's `agy`) is supported through an `octoterm` entry in the shared
    `~/.gemini/config/hooks.json` (state and chat view; its own permission
    prompts are left alone).
+   This adapter targets Antigravity CLI, independently of Gemini CLI and the
+   Antigravity IDE. After upgrading from older Windows builds, reinstall the
+   Antigravity integration in settings and restart running `agy` sessions to
+   replace the old hook command. Chat view reads Antigravity step logs, including
+   thinking blocks in newer CLI versions.
 3. **No file manager.** File management is very unlikely to ever be added —
    that's what the shell in your session is for.
 

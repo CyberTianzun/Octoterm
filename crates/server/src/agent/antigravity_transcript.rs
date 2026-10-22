@@ -1,14 +1,14 @@
 //! Antigravity CLI 的会话记录 → 归一化消息。
 //!
 //! 文件是 `~/.gemini/antigravity-cli/brain/<会话 id>/.system_generated/logs/transcript_full.jsonl`
-//! (hook payload 的 `transcriptPath` 直接给出)。格式按 agy 1.3.5 的实际文件
+//! (hook payload 的 `transcriptPath` 直接给出,也支持 `transcript.jsonl`)。格式按 agy 1.3.5 / 1.4.5 的实际文件
 //! (见 `tests/fixtures/antigravity-transcript.jsonl`):每行是一个**步骤**,
-//! `{step_index, source, type, status, created_at, content?, tool_calls?, error?}`。
+//! `{step_index, source, type, status, created_at, content?, thinking?, tool_calls?, error?}`。
 //!
 //! - `USER_INPUT`:用户消息。正文包在 `<USER_REQUEST>` 里,后面跟着 agy 自己加的
 //!   元数据(本地时间、设置变更),只取标签里面的。
 //! - `PLANNER_RESPONSE`:模型这一步的输出 —— `content` 是正文(可能为空),
-//!   `tool_calls` 是这一步发起的工具调用。记录里没有思考过程。
+//!   `tool_calls` 是这一步发起的工具调用,新版的 `thinking` 作为独立思考块读取。
 //! - `GENERIC`:工具执行结果。`DONE` 成功,`ERROR` 失败、原因在 `error`。
 //!   `content` 开头有两行 `Created At:` / `Completed At:`,是元数据,去掉。
 //! - 认不出的步骤类型跳过,不猜。
@@ -45,6 +45,9 @@ fn parse_line(line: &str, at: u64) -> Option<Message> {
         }
         "PLANNER_RESPONSE" => {
             let mut blocks = Vec::new();
+            if let Some(thinking) = step.get("thinking").and_then(Value::as_str).filter(|s| !s.trim().is_empty()) {
+                blocks.push(Block::Thinking { text: clamp_text(thinking.trim().to_string()) });
+            }
             if !content.trim().is_empty() {
                 blocks.push(Block::Text { text: clamp_text(content.trim().to_string()) });
             }
@@ -57,6 +60,7 @@ fn parse_line(line: &str, at: u64) -> Option<Message> {
         }
         // 工具输出归到 user 一侧,和 Claude、Codex、Grok 的放法一致
         "GENERIC" => {
+            if step.get("status").and_then(Value::as_str) == Some("RUNNING") { return None; }
             let ok = step.get("status").and_then(Value::as_str) != Some("ERROR");
             let text = match step.get("error").and_then(Value::as_str) {
                 Some(e) if !ok && !e.is_empty() => e.to_string(),
@@ -124,15 +128,15 @@ pub fn locate(home: &std::path::Path, session_id: &str) -> Option<std::path::Pat
     if session_id.is_empty() || session_id.contains(['/', '\\']) || session_id.contains("..") {
         return None;
     }
-    let p = home
+    let logs = home
         .join(".gemini")
         .join("antigravity-cli")
         .join("brain")
         .join(session_id)
         .join(".system_generated")
-        .join("logs")
-        .join("transcript_full.jsonl");
-    p.is_file().then_some(p)
+        .join("logs");
+    ["transcript_full.jsonl", "transcript.jsonl"].into_iter()
+        .map(|name| logs.join(name)).find(|p| p.is_file())
 }
 
 #[cfg(test)]
