@@ -7,7 +7,6 @@ import android.content.res.Configuration
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelProvider.AndroidViewModelFactory.Companion.APPLICATION_KEY
-import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import ai.eclosion.octoterm.android.agent.AgentSession
@@ -30,6 +29,8 @@ import ai.eclosion.octoterm.android.connection.ConnectionStore
 import ai.eclosion.octoterm.android.connection.ConnectionUrl
 import ai.eclosion.octoterm.android.connection.ConnectionUrlException
 import ai.eclosion.octoterm.android.connection.ServerConnection
+import ai.eclosion.octoterm.android.connection.ServerConnectionStatus
+import ai.eclosion.octoterm.android.connection.ParsedEndpoint
 import ai.eclosion.octoterm.android.launcher.Launcher
 import ai.eclosion.octoterm.android.launcher.Launchers
 import ai.eclosion.octoterm.android.net.OctoClient
@@ -99,6 +100,7 @@ sealed class UserMessage {
     data object Timeout : UserMessage()
     data object Closed : UserMessage()
     data object Unexpected : UserMessage()
+    data object BackgroundUnavailable : UserMessage()
     data object Copied : UserMessage()
     data object ImportFailed : UserMessage()
     data object TooManySessions : UserMessage()
@@ -136,6 +138,9 @@ data class ConnectionUiState(
     val screen: AppScreen = AppScreen.List,
     val editor: EditorState = EditorState(),
     val connectingId: String? = null,
+    val connectionStatuses: Map<String, ServerConnectionStatus> = emptyMap(),
+    val keepConnectionsInBackground: Boolean = true,
+    val connectionServiceRunning: Boolean = false,
     val pendingDelete: ServerConnection? = null,
     val showAddSheet: Boolean = false,
     val sessions: List<SessionInfo> = emptyList(),
@@ -164,9 +169,95 @@ data class ConnectionUiState(
     val chatAvailable: Boolean get() = AgentSessions.chatAvailable(agents, attachedId, transcriptEnabled)
 }
 
-class ConnectionViewModel(
+interface ConnectionActions {
+    val state: StateFlow<ConnectionUiState>
+    val messages: Flow<UserMessage>
+    val painted: TermFrame
+    fun openAddSheet()
+    fun dismissAddSheet()
+    fun addFromClipboard()
+    fun addManually()
+    fun edit(id: String)
+    fun closeEditor()
+    fun openAppearance()
+    fun closeAppearance()
+    fun openCloudAccount()
+    fun closeCloudAccount()
+    fun onNameChange(value: String)
+    fun onUrlChange(value: String)
+    fun onTokenChange(value: String)
+    fun pasteClipboardIntoEditor()
+    fun saveEditor()
+    fun requestDelete(connection: ServerConnection)
+    fun dismissDelete()
+    fun confirmDelete()
+    fun connect(id: String)
+    fun leaveServer()
+    fun openFromNotification(cloudServerId: String, session: Long, agentId: String?)
+    fun openLauncherMenu()
+    fun dismissLauncherMenu()
+    fun newSession(launcher: Launcher)
+    suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean, workspace: String): HistoryPage
+    suspend fun previewHistory(entry: HistoryEntry): ChatWindow
+    suspend fun resumeHistory(entry: HistoryEntry)
+    fun openSession(sessionId: Long)
+    fun leaveTerminal()
+    fun closeOpenSession(id: Long)
+    fun activeEmulator(): VtEmulator?
+    fun sendInput(bytes: ByteArray)
+    fun sendInput(sessionId: Long, bytes: ByteArray)
+    fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean)
+    fun scrollBy(delta: Int)
+    fun jumpToBottom()
+    fun setSelection(selection: TermSelection?)
+    fun copySelection()
+    fun pasteClipboard()
+    fun setFontSize(size: Float)
+    fun setExtraKeyRows(rows: Int)
+    fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout)
+    fun setFont(kind: TermFontKind)
+    fun setScrollback(lines: Int)
+    fun onSystemThemeChanged(prefersDark: Boolean)
+    fun followSystemTheme()
+    fun selectTheme(name: String)
+    fun exportAppearance(): String
+    fun importAppearance(text: String)
+    fun copyAppearance()
+    fun importAppearanceFromClipboard()
+    fun proposeSize(cols: Int, rows: Int)
+    fun requestRename(session: SessionInfo)
+    fun onRenameDraft(value: String)
+    fun confirmRename()
+    fun dismissRename()
+    fun killSession(id: Long)
+    fun attachedSession(): SessionInfo?
+    fun openTabs(): List<SessionInfo>
+    fun toggleChat()
+    fun connection(id: String): ServerConnection?
+    fun reconnect(id: String)
+    fun disconnectServer(id: String)
+    fun disconnectAll()
+    fun onUiForegroundChanged(foreground: Boolean)
+    fun setKeepConnectionsInBackground(enabled: Boolean)
+}
+
+class ConnectionViewModel(private val controller: ConnectionController) : ViewModel(), ConnectionActions by controller {
+    override fun onCleared() {
+        controller.releaseTerminalUi()
+        super.onCleared()
+    }
+    companion object {
+        val Factory: ViewModelProvider.Factory get() = ConnectionController.Factory
+        internal fun significantResize(cols: Int, rows: Int, prevCols: Int, prevRows: Int): Boolean =
+            ConnectionController.significantResize(cols, rows, prevCols, prevRows)
+    }
+}
+
+class ConnectionController(
     private val app: Application,
-) : ViewModel() {
+) : ConnectionActions {
+    private val controllerScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Main.immediate)
+    private val connectionPreferences = ai.eclosion.octoterm.android.connection.ConnectionPreferences(app)
     private val store = ConnectionStore(app)
     private val appearanceStore = AppearanceStore(app)
     private var systemDark = app.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
@@ -174,6 +265,15 @@ class ConnectionViewModel(
     private val main = Handler(Looper.getMainLooper())
     private val http = OkHttpClient.Builder().callTimeout(8, TimeUnit.SECONDS).build()
     private var client: OctoClient? = null
+    private val links = ai.eclosion.octoterm.android.connection.ServerConnectionRegistry<LiveServerConnection> { link ->
+        link.agentJob?.cancel(); link.timeoutJob?.cancel(); link.client.close()
+        link.status = ServerConnectionStatus.Disconnected
+    }
+    private var selectedServerId: String?
+        get() = links.selectedId
+        set(value) { links.select(value) }
+    private var uiForeground = false
+    private var viewportsSuspended = false
     private val opens = LinkedHashMap<Long, OpenSession>()
     private var activeId: Long? = null
     private var httpOrigin: String? = null
@@ -181,19 +281,13 @@ class ConnectionViewModel(
     private var awaitingCreated = false
     /** 点通知要去的会话;连上并拿到会话列表后消费,连接失败/断开即作废。 */
     private val pendingOpen = PendingOpenTracker()
-    /** 每次发起连接 +1:旧连接的握手超时不能误伤用户之后发起的新连接。 */
-    private var connectAttempt = 0L
-    private var agentJob: Job? = null
-    private var agentAgain = false
-    /** 每次 agent 表被事件改动就 +1:拉取期间到达的事件不能被较旧的快照覆盖 */
-    private var agentRevision = 0L
     private var chatJob: Job? = null
     private var chatAgain = false
     private var chatCursor: String? = null
     /** 当前消息属于哪个 agent 会话。换了 agent 就得整段重拉,旧游标对新记录没有意义 */
     private var chatAgentKey: String? = null
     @Volatile
-    var painted: TermFrame = TermFrame.Empty
+    override var painted: TermFrame = TermFrame.Empty
         private set
     private var proposedCols = 80
     private var proposedRows = 24
@@ -206,17 +300,18 @@ class ConnectionViewModel(
             appearanceFollowsSystem = appearanceStore.followsSystem(),
             extraKeyRows = appearanceStore.extraKeyRows(),
             agentKeyLayouts = appearanceStore.agentKeyLayouts(),
+            keepConnectionsInBackground = connectionPreferences.keepInBackground,
         ),
     )
-    val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
+    override val state: StateFlow<ConnectionUiState> = _state.asStateFlow()
 
     // 用 Channel 而不是 replay=0 的 SharedFlow:冷启动点通知时 handleIntent 先于 setContent,
     // 那时还没有收集者,一次性提示会直接丢失;Channel 会缓存到界面开始收集为止。
     // 容量限定为 4 并丢最旧的:突发事件不该堆积成几十条迟到很久才弹出的 snackbar。
     private val _messages = Channel<UserMessage>(capacity = 4, onBufferOverflow = BufferOverflow.DROP_OLDEST)
-    val messages: Flow<UserMessage> = _messages.receiveAsFlow()
+    override val messages: Flow<UserMessage> = _messages.receiveAsFlow()
 
-    fun openAddSheet() {
+    override fun openAddSheet() {
         val clip = clipboardUrl()
         if (clip == null) {
             startEditor(null, null)
@@ -225,65 +320,65 @@ class ConnectionViewModel(
         }
     }
 
-    fun dismissAddSheet() {
+    override fun dismissAddSheet() {
         _state.update { it.copy(showAddSheet = false) }
     }
 
-    fun addFromClipboard() {
+    override fun addFromClipboard() {
         val clip = _state.value.editor.clipboardUrl ?: clipboardUrl()
         _state.update { it.copy(showAddSheet = false) }
         startEditor(null, clip)
     }
 
-    fun addManually() {
+    override fun addManually() {
         _state.update { it.copy(showAddSheet = false) }
         startEditor(null, null)
     }
 
-    fun edit(id: String) {
+    override fun edit(id: String) {
         startEditor(id, null)
     }
 
-    fun closeEditor() {
+    override fun closeEditor() {
         _state.update {
             it.copy(screen = AppScreen.List, editor = EditorState(clipboardUrl = clipboardUrl()))
         }
     }
 
-    fun openAppearance() {
+    override fun openAppearance() {
         _state.update { it.copy(screen = AppScreen.Appearance) }
     }
 
-    fun closeAppearance() {
+    override fun closeAppearance() {
         _state.update { it.copy(screen = AppScreen.List) }
     }
 
-    fun openCloudAccount() {
+    override fun openCloudAccount() {
         _state.update { it.copy(screen = AppScreen.CloudAccount) }
     }
 
-    fun closeCloudAccount() {
+    override fun closeCloudAccount() {
         _state.update { it.copy(screen = AppScreen.List) }
     }
 
-    fun onNameChange(value: String) {
+    override fun onNameChange(value: String) {
         _state.update { it.copy(editor = it.editor.copy(name = value)) }
     }
 
-    fun onUrlChange(value: String) {
+    override fun onUrlChange(value: String) {
         _state.update { it.copy(editor = refreshWarnings(it.editor.copy(url = value, urlError = null))) }
     }
 
-    fun onTokenChange(value: String) {
+    override fun onTokenChange(value: String) {
         _state.update { it.copy(editor = it.editor.copy(token = value, tokenError = null)) }
     }
 
-    fun pasteClipboardIntoEditor() {
+    override fun pasteClipboardIntoEditor() {
         val clip = clipboardUrl() ?: return
         applyPrefill(_state.value.editor.copy(clipboardUrl = clip), clip)
     }
 
-    fun saveEditor() {
+    override fun saveEditor() {
         val current = _state.value
         val editor = current.editor
         val parsed = try {
@@ -315,6 +410,11 @@ class ConnectionViewModel(
                 else item.copy(name = editor.name.trim(), url = editor.url.trim(), token = token)
             }
         }
+        if (editingId != null) {
+            val previous = current.connections.firstOrNull { it.id == editingId }
+            val next = updated.firstOrNull { it.id == editingId }
+            if (previous?.url != next?.url || previous?.token != next?.token) disconnectServer(editingId)
+        }
         persist(updated)
         _state.update {
             it.copy(
@@ -326,189 +426,266 @@ class ConnectionViewModel(
         _messages.trySend(UserMessage.Saved)
     }
 
-    fun requestDelete(connection: ServerConnection) {
+    override fun requestDelete(connection: ServerConnection) {
         _state.update { it.copy(pendingDelete = connection) }
     }
 
-    fun dismissDelete() {
+    override fun dismissDelete() {
         _state.update { it.copy(pendingDelete = null) }
     }
 
-    fun confirmDelete() {
+    override fun confirmDelete() {
         val target = _state.value.pendingDelete ?: return
+        disconnectServer(target.id)
+        links.remove(target.id)
         val updated = _state.value.connections.filterNot { it.id == target.id }
         persist(updated)
         _state.update { it.copy(connections = updated, pendingDelete = null) }
+        publishConnections()
         _messages.trySend(UserMessage.Deleted)
     }
 
-    fun connect(id: String) {
-        // 每个提前返回都作废点通知的跳转:它只属于为它发起的那次连接。
-        val connection = _state.value.connections.firstOrNull { it.id == id } ?: run {
-            pendingOpen.onConnectFailed()
-            return
-        }
-        if (_state.value.connectingId != null) {
-            pendingOpen.onConnectFailed()
-            return
-        }
-        val parsed = try {
-            ConnectionUrl.parse(connection.url, connection.token)
-        } catch (_: ConnectionUrlException) {
-            pendingOpen.onConnectFailed()
-            _messages.trySend(UserMessage.Unexpected)
-            return
-        }
-        val token = parsed.token
-        if (token.isNullOrEmpty()) {
-            pendingOpen.onConnectFailed()
-            _messages.trySend(UserMessage.AuthFailed(null))
-            return
-        }
+    override fun connect(id: String) {
+        val connection = connection(id) ?: run { pendingOpen.onConnectFailed(); return }
+        if (selectedServerId != null && selectedServerId != id) leaveServer()
         pendingOpen.onConnectStart(id)
-        val attempt = ++connectAttempt
-        httpOrigin = parsed.httpOrigin()
-        httpToken = token
-        _state.update { it.copy(connectingId = id, serverOs = "") }
+        selectedServerId = id
+        var link = links[id]
+        if (link == null || !link.status.active || link.connection.url != connection.url || link.connection.token != connection.token) {
+            link = createLink(connection) ?: run { leaveServer(); return }
+        }
+        activateLink(link)
+        if (link.status == ServerConnectionStatus.Connected) {
+            link.client.send(ClientMsg.ListSessions)
+            refreshAgents(link)
+        }
+    }
+
+    private fun activateLink(link: LiveServerConnection) {
+        selectedServerId = link.connection.id
+        client = link.client
+        httpOrigin = link.endpoint.httpOrigin()
+        httpToken = link.endpoint.token
+        val connected = link.status == ServerConnectionStatus.Connected
+        _state.update { it.copy(
+            screen = if (connected || link.sessions.isNotEmpty() || it.screen is AppScreen.Server) AppScreen.Server(link.connection.id) else AppScreen.List,
+            connectingId = if (connected) null else link.connection.id,
+            sessions = link.sessions, agents = link.agents, transcriptEnabled = link.transcriptEnabled,
+            serverOs = link.os, reconnecting = !connected,
+        ) }
+    }
+
+    private fun createLink(connection: ServerConnection): LiveServerConnection? {
+        val endpoint = try { ConnectionUrl.parse(connection.url, connection.token) }
+        catch (_: ConnectionUrlException) {
+            pendingOpen.onConnectFailed(); _messages.trySend(UserMessage.Unexpected); return null
+        }
+        if (endpoint.token.isNullOrBlank()) {
+            pendingOpen.onConnectFailed(); _messages.trySend(UserMessage.AuthFailed(null)); return null
+        }
         val next = OctoClient()
-        client?.close()
-        client = next
-        next.onOpen = {
-            onMain {
-                // 已被取消/替换的连接迟到的回调不能再切屏。
-                if (client !== next) return@onMain
-                val now = System.currentTimeMillis()
-                val updated = _state.value.connections.map { item ->
-                    if (item.id == id) item.copy(lastUsedAt = now) else item
-                }
-                persist(updated)
-                _state.update {
-                    it.copy(
-                        connections = updated,
-                        connectingId = null,
-                        reconnecting = false,
-                        screen = AppScreen.Server(id),
-                    )
-                }
-                next.send(ClientMsg.ListSessions)
-                // 断线期间漏掉的 agent-event 靠这次全量拉取补齐(协议 A5),不做增量对账
-                agentRevision++
-                refreshAgents()
-            }
+        val link = LiveServerConnection(connection, endpoint, next)
+        links[connection.id] = link
+        if (selectedServerId == connection.id) {
+            client = next; httpOrigin = endpoint.httpOrigin(); httpToken = endpoint.token
         }
-        next.onReconnecting = { onMain { _state.update { it.copy(reconnecting = true) } } }
-        next.onFatal = { message ->
-            onMain {
-                if (client !== next) return@onMain
+        publishConnections()
+        next.onOpen = { onMain {
+            if (!links.isCurrent(connection.id, link)) return@onMain
+            link.status = ServerConnectionStatus.Connected
+            link.timeoutJob?.cancel()
+            val now = System.currentTimeMillis()
+            val updated = _state.value.connections.map { if (it.id == connection.id) it.copy(lastUsedAt = now) else it }
+            persist(updated)
+            _state.update { it.copy(connections = updated) }
+            publishConnections()
+            next.send(ClientMsg.ListSessions)
+            link.agentRevision++
+            refreshAgents(link)
+            if (client === next && selectedServerId == connection.id) {
+                _state.update { it.copy(connectingId = null, reconnecting = false, screen = AppScreen.Server(connection.id)) }
+                if (viewportsSuspended && uiForeground) resumeViewports()
+            }
+        } }
+        next.onReconnecting = { onMain {
+            if (!links.isCurrent(connection.id, link)) return@onMain
+            link.status = ServerConnectionStatus.Reconnecting
+            publishConnections()
+            if (client === next) _state.update { it.copy(reconnecting = true) }
+        } }
+        next.onFatal = { message -> onMain {
+            if (!links.isCurrent(connection.id, link)) return@onMain
+            links.disconnect(connection.id)
+            link.status = ServerConnectionStatus.Failed
+            if (client === next) {
                 pendingOpen.onConnectFailed()
-                closeAllSessions()
-                _state.update { it.copy(connectingId = null, reconnecting = false) }
-                dropClient()
+                leaveServer()
                 _messages.trySend(UserMessage.AuthFailed(message))
-                if (_state.value.screen is AppScreen.Server) {
-                    _state.update {
-                        it.copy(
-                            screen = AppScreen.List,
-                            sessions = emptyList(),
-                            attachedId = null,
-                            openSessionIds = emptyList(),
-                        )
-                    }
-                }
             }
-        }
-        next.onControl = { msg ->
-            onMain {
-                if (client !== next) return@onMain
-                if (msg is ServerMsg.HelloOk) {
-                    _state.update { it.copy(serverOs = msg.os) }
-                    CloudLink.record(_state.value.connections, id, msg.cloudServerId)?.let { updated ->
-                        persist(updated)
-                        _state.update { it.copy(connections = updated) }
+            publishConnections()
+        } }
+        next.onControl = { msg -> onMain {
+            if (!links.isCurrent(connection.id, link)) return@onMain
+            when (msg) {
+                is ServerMsg.HelloOk -> {
+                    link.os = msg.os
+                    CloudLink.record(_state.value.connections, connection.id, msg.cloudServerId)?.let { updated ->
+                        persist(updated); _state.update { it.copy(connections = updated) }
                     }
                 }
+                is ServerMsg.Sessions -> link.sessions = msg.sessions
+                is ServerMsg.SessionEvent -> next.send(ClientMsg.ListSessions)
+                is ServerMsg.AgentEvent -> {
+                    link.agentRevision++
+                    link.agents = AgentSessions.applyEvent(link.agents, msg.session)
+                    if (msg.session.state != AgentState.Done && link.agents[msg.session.key]?.supportsTranscript == null) refreshAgents(link)
+                }
+                else -> Unit
+            }
+            if (client === next && selectedServerId == connection.id) {
+                _state.update { it.copy(serverOs = link.os, agents = link.agents, transcriptEnabled = link.transcriptEnabled) }
                 handleServer(msg)
             }
-        }
-        next.onChannelData = { channel, payload ->
-            // 必须和 control 同一条主线程队列、按到达顺序处理。
-            // 若在 OkHttp 线程 write、主线程 resync-begin/reset，重绘字节会被后到的 reset 清掉。
-            onMain {
-                val open = opens.values.firstOrNull { it.channel == channel } ?: return@onMain
-                open.emulator.write(payload)
-                next.noteData(channel, payload.size)
-                if (open.id == activeId && open.paintGate.shouldPublishWrite()) schedulePublish()
-            }
-        }
-        next.connect(parsed.webSocketUrl, token)
-        viewModelScope.launch {
-            // Handshake timeout: if still connecting, fail.
+        } }
+        next.onChannelData = { channel, payload -> onMain {
+            if (client !== next || selectedServerId != connection.id || viewportsSuspended) return@onMain
+            val open = opens.values.firstOrNull { it.channel == channel } ?: return@onMain
+            open.emulator.write(payload)
+            next.noteData(channel, payload.size)
+            if (open.id == activeId && open.paintGate.shouldPublishWrite()) schedulePublish()
+        } }
+        next.connect(endpoint.webSocketUrl, endpoint.token!!)
+        link.timeoutJob = controllerScope.launch {
             kotlinx.coroutines.delay(12_000)
-            if (connectAttempt == attempt && _state.value.connectingId == id && _state.value.screen !is AppScreen.Server) {
-                pendingOpen.onConnectFailed()
-                dropClient()
-                _state.update { it.copy(connectingId = null) }
-                _messages.trySend(UserMessage.Timeout)
+            if (links.isCurrent(connection.id, link) && link.status == ServerConnectionStatus.Connecting) {
+                links.disconnect(connection.id); link.status = ServerConnectionStatus.Failed
+                if (client === next) { pendingOpen.onConnectFailed(); leaveServer(); _messages.trySend(UserMessage.Timeout) }
+                publishConnections()
+            }
+        }
+        return link
+    }
+
+    /** Navigation releases terminal viewports but leaves the server transport application-owned. */
+    override fun leaveServer() {
+        pendingOpen.onDisconnect()
+        leaveTerminal()
+        client = null
+        selectedServerId = null
+        httpOrigin = null; httpToken = null
+        _state.update { it.copy(
+            screen = AppScreen.List, sessions = emptyList(), agents = emptyMap(), connectingId = null,
+            attachedId = null, openSessionIds = emptyList(), reconnecting = false, serverOs = "",
+            transcriptEnabled = false, chat = ChatUiState(), pendingRename = null,
+            launcherMenu = LauncherMenuState(), selection = null, scrollOffset = 0, mouseTracking = false,
+        ) }
+    }
+
+    override fun disconnectServer(id: String) {
+        if (selectedServerId == id) leaveServer()
+        links.disconnect(id)
+        publishConnections()
+    }
+
+    override fun reconnect(id: String) {
+        val wasSelected = selectedServerId == id
+        disconnectServer(id)
+        val connection = connection(id) ?: return
+        if (wasSelected) connect(id) else createLink(connection)
+    }
+
+    override fun disconnectAll() {
+        leaveServer()
+        links.disconnectAll()
+        connectionPreferences.desiredConnections = emptySet()
+        publishConnections()
+    }
+
+    private fun publishConnections(persistDesired: Boolean = true) {
+        val statuses = links.mapValues { it.value.status }
+        _state.update { it.copy(connectionStatuses = statuses) }
+        if (persistDesired) connectionPreferences.desiredConnections = links.activeIds
+        syncConnectionService()
+    }
+
+    private fun syncConnectionService() {
+        val needed = _state.value.keepConnectionsInBackground && links.values.any { it.status.active }
+        if (!needed) ai.eclosion.octoterm.android.connection.ConnectionService.stop(app)
+        else if (uiForeground) {
+            if (!ai.eclosion.octoterm.android.connection.ConnectionService.start(app)) {
+                _messages.trySend(UserMessage.BackgroundUnavailable)
             }
         }
     }
 
-    fun disconnect() {
-        android.util.Log.i("OctotermPush", "Terminal connection disconnected")
-        pendingOpen.onDisconnect()
-        resetChat()
-        agentJob?.cancel()
-        agentJob = null
-        closeAllSessions()
-        dropClient()
-        httpOrigin = null
-        httpToken = null
-        _state.update {
-            it.copy(
-                screen = AppScreen.List,
-                sessions = emptyList(),
-                attachedId = null,
-                openSessionIds = emptyList(),
-                reconnecting = false,
-                serverOs = "",
-                agents = emptyMap(),
-                transcriptEnabled = false,
-                chat = ChatUiState(),
-                pendingRename = null,
-                launcherMenu = LauncherMenuState(),
-                selection = null,
-                scrollOffset = 0,
-                mouseTracking = false,
-            )
+    fun restoreDesiredConnections() {
+        val desired = connectionPreferences.desiredConnections
+        for (connection in _state.value.connections) {
+            if (connection.id !in desired || links[connection.id]?.status?.active == true) continue
+            val link = createLink(connection) ?: continue
+            if (selectedServerId == connection.id) activateLink(link)
         }
     }
 
-    fun openFromNotification(cloudServerId: String, session: Long, agentId: String?) {
-        val conn = CloudLink.find(_state.value.connections, cloudServerId) ?: run {
-            pendingOpen.onConnectFailed()
-            _messages.trySend(UserMessage.ConnectServerFirst)
-            return
+    fun onConnectionServiceRunning(running: Boolean) {
+        _state.update { it.copy(connectionServiceRunning = running) }
+        if (!running) syncConnectionService()
+    }
+
+    override fun setKeepConnectionsInBackground(enabled: Boolean) {
+        connectionPreferences.keepInBackground = enabled
+        _state.update { it.copy(keepConnectionsInBackground = enabled) }
+        syncConnectionService()
+    }
+
+    override fun onUiForegroundChanged(foreground: Boolean) {
+        uiForeground = foreground
+        if (foreground) {
+            restoreDesiredConnections()
+            syncConnectionService()
+            if (viewportsSuspended && client != null && !_state.value.reconnecting) resumeViewports()
+            if (_state.value.chatOpen) refreshChat(incremental = true)
+        } else {
+            suspendViewports()
+            chatJob?.cancel(); chatJob = null
+            if (!_state.value.keepConnectionsInBackground) {
+                val desired = connectionPreferences.desiredConnections
+                links.disconnectAll()
+                selectedServerId = (_state.value.screen as? AppScreen.Server)?.connectionId
+                client = null
+                _state.update { it.copy(reconnecting = selectedServerId != null) }
+                publishConnections(persistDesired = false)
+                connectionPreferences.desiredConnections = desired
+            }
         }
-        val target = PendingOpen(conn.id, session, agentId?.let { AgentPush.tag(cloudServerId, session, it) })
-        val st = _state.value
-        val screen = st.screen
-        if (screen is AppScreen.Server && screen.connectionId == conn.id && st.connectingId == null) {
-            pendingOpen.onTap(target)
-            client?.send(ClientMsg.ListSessions) // 列表回来后在 handleServer 里打开
-            return
+    }
+
+    private fun suspendViewports() {
+        if (viewportsSuspended || opens.isEmpty()) return
+        main.removeCallbacks(proposeFlush)
+        main.removeCallbacks(publishSoon)
+        for (open in opens.values) {
+            client?.detach(open.channel); open.paintGate.onDetached(); open.pendingAttach = false
         }
-        // 用户最新的意图优先:放弃正在进行的连接/已连着的别的服务器,改连目标。
-        if (st.connectingId != null) cancelConnecting()
-        if (screen is AppScreen.Server) disconnect()
+        viewportsSuspended = true
+    }
+
+    private fun resumeViewports() {
+        if (!uiForeground || activeId == null || _state.value.chatOpen) return
+        viewportsSuspended = false
+        for (open in opens.values) { open.pendingAttach = true; open.paintGate.onSessionOpen() }
+        main.removeCallbacks(proposeFlush); main.post(proposeFlush)
+    }
+
+    override fun openFromNotification(cloudServerId: String, session: Long, agentId: String?) {
+        val connection = CloudLink.find(_state.value.connections, cloudServerId) ?: run {
+            _messages.trySend(UserMessage.ConnectServerFirst); return
+        }
+        val target = PendingOpen(connection.id, session, agentId?.let { AgentPush.tag(cloudServerId, session, it) })
+        if (selectedServerId != connection.id) leaveServer()
         pendingOpen.onTap(target)
-        connect(conn.id)
-    }
-
-    /** 放弃正在握手的连接;作废它的超时计时。 */
-    private fun cancelConnecting() {
-        connectAttempt++
-        dropClient()
-        _state.update { it.copy(connectingId = null) }
+        connect(connection.id)
+        client?.send(ClientMsg.ListSessions)
     }
 
     private fun consumePendingOpen() {
@@ -525,25 +702,25 @@ class ConnectionViewModel(
         }
     }
 
-    fun openLauncherMenu() {
+    override fun openLauncherMenu() {
         val origin = httpOrigin
         val token = httpToken
         if (origin.isNullOrEmpty() || token.isNullOrEmpty()) return
         _state.update {
             it.copy(launcherMenu = LauncherMenuState(open = true, loading = true, items = listOf(Launchers.fallback())))
         }
-        viewModelScope.launch {
+        controllerScope.launch {
             val items = withContext(Dispatchers.IO) { Launchers.fetch(http, origin, token) }
             if (!_state.value.launcherMenu.open) return@launch
             _state.update { it.copy(launcherMenu = LauncherMenuState(open = true, loading = false, items = items)) }
         }
     }
 
-    fun dismissLauncherMenu() {
+    override fun dismissLauncherMenu() {
         _state.update { it.copy(launcherMenu = LauncherMenuState()) }
     }
 
-    fun newSession(launcher: Launcher) {
+    override fun newSession(launcher: Launcher) {
         _state.update { it.copy(launcherMenu = LauncherMenuState()) }
         awaitingCreated = true
         val command = launcher.command.takeIf { it.isNotEmpty() }
@@ -556,19 +733,19 @@ class ConnectionViewModel(
         )
     }
 
-    suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean, workspace: String): HistoryPage {
+    override suspend fun loadHistory(query: String, agent: String, offset: Int, refresh: Boolean, workspace: String): HistoryPage {
         val origin = httpOrigin ?: throw HistoryFailure("unreadable")
         val token = httpToken ?: throw HistoryFailure("unreadable")
         return withContext(Dispatchers.IO) { AgentHistory.fetch(http, origin, token, query, agent, offset, refresh, workspace) }
     }
 
-    suspend fun previewHistory(entry: HistoryEntry): ChatWindow {
+    override suspend fun previewHistory(entry: HistoryEntry): ChatWindow {
         val origin = httpOrigin ?: throw HistoryFailure("unreadable")
         val token = httpToken ?: throw HistoryFailure("unreadable")
         return withContext(Dispatchers.IO) { AgentHistory.messages(http, origin, token, entry) }
     }
 
-    suspend fun resumeHistory(entry: HistoryEntry) {
+    override suspend fun resumeHistory(entry: HistoryEntry) {
         val connection = client ?: throw HistoryFailure("unreadable")
         if (_state.value.reconnecting) throw HistoryFailure("unreadable")
         val origin = httpOrigin ?: throw HistoryFailure("unreadable")
@@ -582,16 +759,17 @@ class ConnectionViewModel(
         }
         openSession(session.id)
         connection.send(ClientMsg.ListSessions)
-        agentRevision++
+        selectedServerId?.let { links[it]?.agentRevision = (links[it]?.agentRevision ?: 0) + 1 }
         refreshAgents()
     }
 
-    fun openSession(sessionId: Long) {
+    override fun openSession(sessionId: Long) {
         if (_state.value.chat.sessionId != sessionId) resetChat()
         val existing = opens[sessionId]
         if (existing != null) {
             activeId = sessionId
             _state.update { it.copy(selection = null) }
+            if (viewportsSuspended && uiForeground) resumeViewports()
             publishTerm()
             return
         }
@@ -607,6 +785,7 @@ class ConnectionViewModel(
         open.paintGate.onSessionOpen()
         opens[sessionId] = open
         activeId = sessionId
+        if (!uiForeground || _state.value.chatOpen) viewportsSuspended = true
         painted = TermFrame.Empty
         _state.update {
             it.copy(
@@ -622,14 +801,17 @@ class ConnectionViewModel(
         main.post(proposeFlush)
     }
 
-    /** 回到会话列表，已经打开的会话保持 attach。 */
-    fun leaveTerminal() {
+    /** Returning to the session list releases every local terminal viewport. */
+    override fun leaveTerminal() {
         resetChat()
-        activeId = null
-        _state.update { it.copy(attachedId = null, selection = null) }
+        main.removeCallbacks(proposeFlush)
+        main.removeCallbacks(publishSoon)
+        closeAllSessions()
+        viewportsSuspended = false
+        _state.update { it.copy(attachedId = null, openSessionIds = emptyList(), selection = null, scrollOffset = 0, mouseTracking = false) }
     }
 
-    fun closeOpenSession(id: Long) {
+    override fun closeOpenSession(id: Long) {
         val open = opens.remove(id) ?: return
         if (_state.value.chat.sessionId == id) resetChat()
         client?.detach(open.channel)
@@ -655,13 +837,13 @@ class ConnectionViewModel(
         }
     }
 
-    fun activeEmulator(): VtEmulator? = opens[activeId]?.emulator
+    override fun activeEmulator(): VtEmulator? = opens[activeId]?.emulator
 
-    fun sendInput(bytes: ByteArray) {
+    override fun sendInput(bytes: ByteArray) {
         sendInput(activeId ?: return, bytes)
     }
 
-    fun sendInput(sessionId: Long, bytes: ByteArray) {
+    override fun sendInput(sessionId: Long, bytes: ByteArray) {
         if (_state.value.reconnecting || bytes.isEmpty()) return
         val open = opens[sessionId] ?: return
         open.emulator.scrollToBottom()
@@ -670,7 +852,7 @@ class ConnectionViewModel(
         publishTerm()
     }
 
-    fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean) {
+    override fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean) {
         val open = opens[activeId] ?: return
         if (open.emulator.scrollOffset != 0) open.emulator.scrollToBottom()
         val bytes = open.emulator.encodePointer(col, row, button = 0, pressed = pressed, moving = moving) ?: return
@@ -678,24 +860,24 @@ class ConnectionViewModel(
         client?.sendInput(open.channel, bytes)
     }
 
-    fun scrollBy(delta: Int) {
+    override fun scrollBy(delta: Int) {
         val open = opens[activeId] ?: return
         open.emulator.scrollBy(delta)
         _state.update { it.copy(selection = null) }
         publishTerm(allowEmpty = true)
     }
 
-    fun jumpToBottom() {
+    override fun jumpToBottom() {
         val open = opens[activeId] ?: return
         open.emulator.scrollToBottom()
         publishTerm(allowEmpty = true)
     }
 
-    fun setSelection(selection: TermSelection?) {
+    override fun setSelection(selection: TermSelection?) {
         _state.update { it.copy(selection = selection) }
     }
 
-    fun copySelection() {
+    override fun copySelection() {
         val open = opens[activeId] ?: return
         val selection = _state.value.selection ?: return
         val text = open.emulator.copyViewport(selection.x0, selection.y0, selection.x1, selection.y1)
@@ -705,7 +887,7 @@ class ConnectionViewModel(
         _messages.trySend(UserMessage.Copied)
     }
 
-    fun pasteClipboard() {
+    override fun pasteClipboard() {
         val open = opens[activeId] ?: return
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip
@@ -721,26 +903,26 @@ class ConnectionViewModel(
         publishTerm()
     }
 
-    fun setFontSize(size: Float) = updateAppearance(_state.value.appearance.withFontSize(size))
+    override fun setFontSize(size: Float) = updateAppearance(_state.value.appearance.withFontSize(size))
 
-    fun setExtraKeyRows(rows: Int) {
+    override fun setExtraKeyRows(rows: Int) {
         val next = rows.coerceIn(1, 2)
         appearanceStore.saveExtraKeyRows(next)
         _state.update { it.copy(extraKeyRows = next) }
     }
 
-    fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout) {
+    override fun setAgentKeyLayout(agentId: String, layout: AgentKeyLayout) {
         val next = _state.value.agentKeyLayouts.toMutableMap()
         if (layout == AgentKeyLayout()) next.remove(agentId) else next[agentId] = layout
         appearanceStore.saveAgentKeyLayouts(next)
         _state.update { it.copy(agentKeyLayouts = next) }
     }
 
-    fun setFont(kind: TermFontKind) = updateAppearance(_state.value.appearance.withFont(kind))
+    override fun setFont(kind: TermFontKind) = updateAppearance(_state.value.appearance.withFont(kind))
 
-    fun setScrollback(lines: Int) = updateAppearance(_state.value.appearance.withScrollback(lines))
+    override fun setScrollback(lines: Int) = updateAppearance(_state.value.appearance.withScrollback(lines))
 
-    fun onSystemThemeChanged(prefersDark: Boolean) {
+    override fun onSystemThemeChanged(prefersDark: Boolean) {
         systemDark = prefersDark
         _state.update {
             if (it.appearanceFollowsSystem) {
@@ -750,14 +932,14 @@ class ConnectionViewModel(
         reportColors()
     }
 
-    fun followSystemTheme() {
+    override fun followSystemTheme() {
         updateAppearance(
             _state.value.appearance.withTheme(AppearanceCodec.default(systemDark)),
             followsSystem = true,
         )
     }
 
-    fun selectTheme(name: String) {
+    override fun selectTheme(name: String) {
         val theme = AppearanceCodec.builtin(name) ?: return
         val current = _state.value.appearance
         updateAppearance(
@@ -766,9 +948,9 @@ class ConnectionViewModel(
         )
     }
 
-    fun exportAppearance(): String = AppearanceCodec.exportJson(_state.value.appearance)
+    override fun exportAppearance(): String = AppearanceCodec.exportJson(_state.value.appearance)
 
-    fun importAppearance(text: String) {
+    override fun importAppearance(text: String) {
         val next = AppearanceCodec.importJson(text, _state.value.appearance)
         if (next == null) {
             _messages.trySend(UserMessage.ImportFailed)
@@ -778,13 +960,13 @@ class ConnectionViewModel(
         _messages.trySend(UserMessage.Saved)
     }
 
-    fun copyAppearance() {
+    override fun copyAppearance() {
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("octoterm-appearance", exportAppearance()))
         _messages.trySend(UserMessage.Copied)
     }
 
-    fun importAppearanceFromClipboard() {
+    override fun importAppearanceFromClipboard() {
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip
             ?.takeIf { it.itemCount > 0 }
@@ -799,22 +981,22 @@ class ConnectionViewModel(
         importAppearance(text)
     }
 
-    fun proposeSize(cols: Int, rows: Int) {
+    override fun proposeSize(cols: Int, rows: Int) {
         proposedCols = cols.coerceAtLeast(20)
         proposedRows = rows.coerceAtLeast(5)
         main.removeCallbacks(proposeFlush)
         main.postDelayed(proposeFlush, PROPOSE_DEBOUNCE_MS)
     }
 
-    fun requestRename(session: SessionInfo) {
+    override fun requestRename(session: SessionInfo) {
         _state.update { it.copy(pendingRename = session, renameDraft = session.name) }
     }
 
-    fun onRenameDraft(value: String) {
+    override fun onRenameDraft(value: String) {
         _state.update { it.copy(renameDraft = value) }
     }
 
-    fun confirmRename() {
+    override fun confirmRename() {
         val target = _state.value.pendingRename ?: return
         val name = _state.value.renameDraft.trim()
         if (name.isNotEmpty()) {
@@ -823,21 +1005,21 @@ class ConnectionViewModel(
         _state.update { it.copy(pendingRename = null, renameDraft = "") }
     }
 
-    fun dismissRename() {
+    override fun dismissRename() {
         _state.update { it.copy(pendingRename = null, renameDraft = "") }
     }
 
-    fun killSession(id: Long) {
+    override fun killSession(id: Long) {
         if (opens.containsKey(id)) closeOpenSession(id)
         client?.send(ClientMsg.KillSession(id))
     }
 
-    fun attachedSession(): SessionInfo? {
+    override fun attachedSession(): SessionInfo? {
         val id = _state.value.attachedId ?: return null
         return _state.value.sessions.firstOrNull { it.id == id }
     }
 
-    fun openTabs(): List<SessionInfo> {
+    override fun openTabs(): List<SessionInfo> {
         val byId = _state.value.sessions.associateBy { it.id }
         return opens.keys.map { id -> byId[id] ?: SessionInfo(id, "", 0, 0, 0) }
     }
@@ -849,7 +1031,6 @@ class ConnectionViewModel(
                 consumePendingOpen()
             }
             is ServerMsg.SessionEvent -> {
-                client?.send(ClientMsg.ListSessions)
                 if (msg.event == ai.eclosion.octoterm.android.wire.SessionEventKind.Closed) {
                     if (opens.containsKey(msg.session.id)) closeOpenSession(msg.session.id)
                 } else if (msg.event == ai.eclosion.octoterm.android.wire.SessionEventKind.Created && awaitingCreated) {
@@ -905,65 +1086,51 @@ class ConnectionViewModel(
     }
 
     /** 聊天 ⇄ 终端。只有本会话有读得了记录的 agent 时才能进聊天;回终端永远可以。 */
-    fun toggleChat() {
+    override fun toggleChat() {
         val st = _state.value
         if (st.chatOpen) {
             resetChat()
+            resumeViewports()
             return
         }
         val sessionId = st.attachedId ?: return
         if (!st.chatAvailable) return
+        suspendViewports()
         _state.update { it.copy(chat = ChatUiState(sessionId = sessionId, loading = true)) }
         // 进聊天视图才去拉 —— 不看的时候不该白读别人的文件
         refreshChat(incremental = false)
     }
 
     private fun onAgentEvent(ev: AgentSession) {
-        agentRevision++
-        val agents = AgentSessions.applyEvent(_state.value.agents, ev)
-        _state.update { it.copy(agents = agents) }
-        // 新出现的 agent 还不知道能不能读记录 —— 事件不带这一项,要快照来补
-        if (agents[ev.key]?.supportsTranscript == null && ev.state != AgentState.Done) {
-            refreshAgents()
-        }
         closeChatIfUnavailable()
-        // 有事件才可能有新消息 —— 所以不做轮询
-        if (_state.value.chatOpen && ev.session == _state.value.chat.sessionId) refreshChat(incremental = true)
+        if (uiForeground && _state.value.chatOpen && ev.session == _state.value.chat.sessionId) refreshChat(incremental = true)
     }
 
-    /** 全量快照。并发的请求合并成「再拉一次」,不叠加。 */
-    private fun refreshAgents() {
-        if (agentJob?.isActive == true) {
-            agentAgain = true
-            return
-        }
-        val origin = httpOrigin ?: return
-        val token = httpToken ?: return
-        agentJob = viewModelScope.launch {
+    private fun refreshAgents() { selectedServerId?.let { links[it] }?.let(::refreshAgents) }
+
+    private fun refreshAgents(link: LiveServerConnection) {
+        if (link.agentJob?.isActive == true) { link.agentAgain = true; return }
+        link.agentJob = controllerScope.launch {
             do {
-                agentAgain = false
-                val revision = agentRevision
-                val snapshot = withContext(Dispatchers.IO) { AgentSessions.fetch(http, origin, token) }
-                if (revision != agentRevision) {
-                    agentAgain = true
-                    continue
+                link.agentAgain = false
+                val revision = link.agentRevision
+                val snapshot = withContext(Dispatchers.IO) { AgentSessions.fetch(http, link.endpoint.httpOrigin(), link.endpoint.token.orEmpty()) }
+                if (!links.isCurrent(link.connection.id, link)) return@launch
+                if (revision != link.agentRevision) { link.agentAgain = true; continue }
+                link.agents = AgentSessions.replaceAll(snapshot.sessions)
+                link.transcriptEnabled = snapshot.transcriptEnabled
+                if (client === link.client && selectedServerId == link.connection.id) {
+                    _state.update { it.copy(agents = link.agents, transcriptEnabled = snapshot.transcriptEnabled) }
+                    closeChatIfUnavailable()
+                    if (uiForeground && _state.value.chatOpen) refreshChat(incremental = true)
                 }
-                _state.update {
-                    it.copy(
-                        agents = AgentSessions.replaceAll(snapshot.sessions),
-                        transcriptEnabled = snapshot.transcriptEnabled,
-                    )
-                }
-                closeChatIfUnavailable()
-                // 重连期间可能漏了事件:开着聊天就补拉一次
-                if (_state.value.chatOpen) refreshChat(incremental = true)
-            } while (agentAgain)
+            } while (link.agentAgain)
         }
     }
 
     private fun closeChatIfUnavailable() {
         val st = _state.value
-        if (st.chat.sessionId != null && !st.chatAvailable) resetChat()
+        if (st.chat.sessionId != null && !st.chatAvailable) { resetChat(); resumeViewports() }
     }
 
     private fun resetChat() {
@@ -988,7 +1155,7 @@ class ConnectionViewModel(
         }
         val origin = httpOrigin ?: return
         val token = httpToken ?: return
-        chatJob = viewModelScope.launch {
+        chatJob = controllerScope.launch {
             var inc = incremental
             do {
                 chatAgain = false
@@ -1038,12 +1205,8 @@ class ConnectionViewModel(
         }
     }
 
-    private fun dropClient() {
-        client?.close()
-        client = null
-    }
-
     private fun applyProposedSize() {
+        if (viewportsSuspended || !uiForeground || _state.value.chatOpen) return
         main.removeCallbacks(proposeFlush)
         var retryIn = Long.MAX_VALUE
         for (open in opens.values) {
@@ -1137,7 +1300,7 @@ class ConnectionViewModel(
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    fun connection(id: String): ServerConnection? = _state.value.connections.firstOrNull { it.id == id }
+    override fun connection(id: String): ServerConnection? = _state.value.connections.firstOrNull { it.id == id }
 
     private fun startEditor(connectionId: String?, prefillUrl: String?) {
         val existing = connectionId?.let { id -> _state.value.connections.firstOrNull { it.id == id } }
@@ -1220,11 +1383,10 @@ class ConnectionViewModel(
         return text
     }
 
-    override fun onCleared() {
+    fun releaseTerminalUi() {
         main.removeCallbacks(proposeFlush)
         main.removeCallbacks(publishSoon)
-        dropClient()
-        super.onCleared()
+        leaveTerminal()
     }
 
     companion object {
@@ -1241,7 +1403,7 @@ class ConnectionViewModel(
         val Factory: ViewModelProvider.Factory = viewModelFactory {
             initializer {
                 val app = checkNotNull(this[APPLICATION_KEY])
-                ConnectionViewModel(app)
+                ConnectionViewModel((app as ai.eclosion.octoterm.android.OctotermApplication).connections)
             }
         }
     }
@@ -1259,4 +1421,20 @@ private class OpenSession(
     var lastSentCols: Int = 0
     var lastSentRows: Int = 0
     var resizeQuietUntil: Long = 0L
+}
+
+private class LiveServerConnection(
+    val connection: ServerConnection,
+    val endpoint: ParsedEndpoint,
+    val client: OctoClient,
+) {
+    var status = ServerConnectionStatus.Connecting
+    var sessions: List<SessionInfo> = emptyList()
+    var agents: Map<String, AgentSession> = emptyMap()
+    var transcriptEnabled = false
+    var os = ""
+    var agentJob: Job? = null
+    var agentAgain = false
+    var agentRevision = 0L
+    var timeoutJob: Job? = null
 }

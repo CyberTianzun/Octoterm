@@ -3,6 +3,22 @@
     <string name="app_name">Octoterm</string>
 
     <string name="servers_title">服务器</string>
+    <string name="connection_connected">已连接</string>
+    <string name="connection_disconnected">未连接</string>
+    <string name="connection_connecting">连接中…</string>
+    <string name="connection_reconnecting">重连中…</string>
+    <string name="connection_failed">连接失败</string>
+    <string name="connection_open">打开服务器</string>
+    <string name="connection_connect">连接</string>
+    <string name="connection_reconnect">重新连接</string>
+    <string name="connection_disconnect">断开连接</string>
+    <string name="connections_disconnect_all">全部断开</string>
+    <string name="connections_channel">服务器连接</string>
+    <string name="connections_notification_title">Octoterm 服务器连接</string>
+    <string name="connections_notification_summary">%1$d 台已连接，%2$d 台连接或重连中</string>
+    <string name="connections_background_title">后台保持服务器连接</string>
+    <string name="connections_background_hint">返回服务器列表或切到后台后继续接收状态。开启时显示系统常驻通知；关闭后仅在前台连接。</string>
+    <string name="connections_background_unavailable">无法启动后台连接服务，返回前台后可重试</string>
     <string name="servers_add">添加服务器</string>
     <string name="servers_add_clipboard">从剪贴板添加</string>
     <string name="servers_add_manual">手动添加</string>

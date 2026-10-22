@@ -4,6 +4,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.dp
 import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.connection.ServerConnection
+import ai.eclosion.octoterm.android.connection.ServerConnectionStatus
 import androidx.compose.foundation.background
 import ai.eclosion.octoterm.android.ui.cloud.CloudAccountButton
 
@@ -60,6 +62,8 @@ fun ConnectionListScreen(
     onAddFromClipboard: () -> Unit,
     onAddManually: () -> Unit,
     onConnect: (String) -> Unit,
+    onReconnect: (String) -> Unit,
+    onDisconnect: (String) -> Unit,
     onEdit: (String) -> Unit,
     onRequestDelete: (ServerConnection) -> Unit,
     onConfirmDelete: () -> Unit,
@@ -103,9 +107,10 @@ fun ConnectionListScreen(
                 items(state.connections, key = { it.id }) { item ->
                     ServerRow(
                         connection = item,
-                        connecting = state.connectingId == item.id,
-                        enabled = state.connectingId == null,
+                        status = state.connectionStatuses[item.id] ?: ServerConnectionStatus.Disconnected,
                         onConnect = { onConnect(item.id) },
+                        onReconnect = { onReconnect(item.id) },
+                        onDisconnect = { onDisconnect(item.id) },
                         onEdit = { onEdit(item.id) },
                         onDelete = { onRequestDelete(item) },
                     )
@@ -192,17 +197,39 @@ private fun EmptyServers(modifier: Modifier = Modifier, onAdd: () -> Unit) {
 @Composable
 private fun ServerRow(
     connection: ServerConnection,
-    connecting: Boolean,
-    enabled: Boolean,
+    status: ServerConnectionStatus,
     onConnect: () -> Unit,
+    onReconnect: () -> Unit,
+    onDisconnect: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuOpen by remember { mutableStateOf(false) }
     val title = connection.title()
+    val statusLabel = stringResource(when (status) {
+        ServerConnectionStatus.Disconnected -> R.string.connection_disconnected
+        ServerConnectionStatus.Connecting -> R.string.connection_connecting
+        ServerConnectionStatus.Connected -> R.string.connection_connected
+        ServerConnectionStatus.Reconnecting -> R.string.connection_reconnecting
+        ServerConnectionStatus.Failed -> R.string.connection_failed
+    })
+    val color = when (status) {
+        ServerConnectionStatus.Connected -> MaterialTheme.colorScheme.primary
+        ServerConnectionStatus.Connecting, ServerConnectionStatus.Reconnecting -> MaterialTheme.colorScheme.tertiary
+        ServerConnectionStatus.Failed -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
     ListItem(
         headlineContent = { Text(title) },
-        supportingContent = { Text(connection.subtitle()) },
+        supportingContent = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(connection.subtitle(), style = MaterialTheme.typography.bodySmall)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Box(Modifier.size(6.dp).clip(CircleShape).background(color))
+                    Text(statusLabel, color = color, style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        },
         leadingContent = {
             Box(
                 modifier = Modifier
@@ -219,14 +246,27 @@ private fun ServerRow(
             }
         },
         trailingContent = {
-            if (connecting) {
-                CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-            } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (status == ServerConnectionStatus.Connecting || status == ServerConnectionStatus.Reconnecting) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                }
                 Box {
-                    IconButton(onClick = { menuOpen = true }, enabled = enabled) {
+                    IconButton(onClick = { menuOpen = true }) {
                         Icon(Icons.Filled.MoreVert, contentDescription = stringResource(R.string.servers_more))
                     }
                     DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(stringResource(if (status.active) R.string.connection_open else R.string.connection_connect)) },
+                            onClick = { menuOpen = false; onConnect() },
+                        )
+                        DropdownMenuItem(
+                            text = { Text(stringResource(R.string.connection_reconnect)) },
+                            onClick = { menuOpen = false; onReconnect() },
+                        )
+                        if (status.active) DropdownMenuItem(
+                            text = { Text(stringResource(R.string.connection_disconnect)) },
+                            onClick = { menuOpen = false; onDisconnect() },
+                        )
                         DropdownMenuItem(
                             text = { Text(stringResource(R.string.action_edit)) },
                             onClick = {
@@ -245,6 +285,6 @@ private fun ServerRow(
                 }
             }
         },
-        modifier = Modifier.clickable(enabled = enabled && !connecting, onClick = onConnect),
+        modifier = Modifier.clickable(onClick = onConnect),
     )
 }

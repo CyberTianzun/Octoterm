@@ -13,10 +13,12 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 
 class OctoClient(
-    private val http: OkHttpClient = defaultClient(),
+    private val http: WebSocket.Factory = defaultClient(),
+    private val schedule: (Long, () -> Unit) -> Unit = { delay, block ->
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed(block, delay)
+    },
 ) {
     private data class AttachState(
         val sessionId: Long,
@@ -36,32 +38,37 @@ class OctoClient(
     private var token = ""
     private var ws: WebSocket? = null
     private val attachments = LinkedHashMap<Int, AttachState>()
-    private val closedByUser = AtomicBoolean(false)
-    private val authOk = AtomicBoolean(false)
-    @Volatile private var preHelloError: String? = null
+    // Public actions and socket callbacks run on the main thread, including reconnects.
+    private var closedByUser = false
+    private var authOk = false
+    private var preHelloError: String? = null
+    private var generation = 0L
     private var backoffMs = 250L
 
     fun connect(webSocketUrl: String, token: String) {
+        close()
         this.url = webSocketUrl
         this.token = token
-        closedByUser.set(false)
+        closedByUser = false
         backoffMs = 250L
         dial()
     }
 
     fun close() {
-        closedByUser.set(true)
+        closedByUser = true
+        authOk = false
+        generation++
         ws?.close(1000, null)
         ws = null
         attachments.clear()
     }
 
     fun send(msg: ClientMsg) {
-        ws?.send(ByteString.of(*ControlJson.encode(msg)))
+        if (authOk) ws?.send(ByteString.of(*ControlJson.encode(msg)))
     }
 
     fun sendInput(channel: Int, bytes: ByteArray) {
-        if (bytes.isEmpty()) return
+        if (bytes.isEmpty() || !authOk || channel !in attachments) return
         ws?.send(ByteString.of(*Frame.encode(channel, bytes)))
     }
 
@@ -71,7 +78,7 @@ class OctoClient(
     }
 
     fun detach(channel: Int) {
-        attachments.remove(channel)
+        if (attachments.remove(channel) == null) return
         send(ClientMsg.Detach(channel))
     }
 
@@ -99,14 +106,18 @@ class OctoClient(
     }
 
     private fun dial() {
-        authOk.set(false)
+        val attempt = ++generation
+        authOk = false
         preHelloError = null
+        fun dispatch(block: () -> Unit) = schedule(0) {
+            if (!closedByUser && generation == attempt) block()
+        }
         val request = Request.Builder().url(url).build()
         ws = http.newWebSocket(
             request,
             object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
-                    webSocket.send(ByteString.of(*ControlJson.encodeHello(token)))
+                    dispatch { webSocket.send(ByteString.of(*ControlJson.encodeHello(token))) }
                 }
 
                 override fun onMessage(webSocket: WebSocket, text: String) {
@@ -114,15 +125,22 @@ class OctoClient(
                 }
 
                 override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
-                    handle(bytes.toByteArray())
+                    dispatch { handle(bytes.toByteArray()) }
                 }
 
                 override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-                    onSocketGone()
+                    dispatch {
+                        if (response?.code == 401 || response?.code == 403) preHelloError = "HTTP ${response.code}"
+                        onSocketGone()
+                    }
                 }
 
                 override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                    onSocketGone()
+                    dispatch { onSocketGone() }
+                }
+
+                override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                    dispatch { webSocket.close(code, reason); onSocketGone() }
                 }
             },
         )
@@ -145,10 +163,10 @@ class OctoClient(
         }
         when (msg) {
             is ServerMsg.Error -> {
-                if (!authOk.get()) preHelloError = msg.message
+                if (!authOk) preHelloError = msg.message
             }
             is ServerMsg.HelloOk -> {
-                authOk.set(true)
+                authOk = true
                 backoffMs = 250L
                 reattachAll()
                 onOpen()
@@ -184,18 +202,23 @@ class OctoClient(
     }
 
     private fun onSocketGone() {
-        if (closedByUser.get()) return
-        if (!authOk.get() && preHelloError != null) {
-            closedByUser.set(true)
+        if (closedByUser) return
+        // Retire this socket before callbacks can close/reconnect it. Duplicate and late
+        // callbacks cannot schedule a second dial or update a replacement connection.
+        val retired = ++generation
+        ws?.cancel()
+        ws = null
+        if (!authOk && preHelloError != null) {
+            closedByUser = true
             onFatal(preHelloError!!)
             return
         }
         onReconnecting()
         val delay = backoffMs
         backoffMs = (backoffMs * 2).coerceAtMost(10_000L)
-        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-            if (!closedByUser.get()) dial()
-        }, delay)
+        schedule(delay) {
+            if (!closedByUser && generation == retired) dial()
+        }
     }
 
     companion object {
@@ -204,7 +227,7 @@ class OctoClient(
                 .connectTimeout(8, TimeUnit.SECONDS)
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .writeTimeout(0, TimeUnit.MILLISECONDS)
-                .pingInterval(0, TimeUnit.SECONDS)
+                .pingInterval(30, TimeUnit.SECONDS)
                 .retryOnConnectionFailure(false)
                 .build()
         }

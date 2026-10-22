@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
 
     <application
         android:name=".OctotermApplication"
@@ -15,6 +17,8 @@
         android:theme="@style/Theme.Octoterm"
         android:usesCleartextTraffic="true">
         <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
+        <service android:name=".connection.ConnectionService" android:exported="false"
+            android:stopWithTask="false" android:foregroundServiceType="remoteMessaging" />
         <receiver android:name=".push.AliyunMessageReceiver" android:exported="false">
             <intent-filter><action android:name="com.alibaba.sdk.android.push.RECEIVE" /></intent-filter>
             <intent-filter><action android:name="com.alibaba.push2.action.NOTIFICATION_OPENED" /></intent-filter>

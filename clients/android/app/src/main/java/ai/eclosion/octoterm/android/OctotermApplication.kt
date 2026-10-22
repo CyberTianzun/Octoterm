@@ -8,6 +8,7 @@ import com.google.firebase.FirebaseApp
 import com.google.firebase.messaging.FirebaseMessaging
 
 class OctotermApplication : Application() {
+    val connections by lazy { ai.eclosion.octoterm.android.ui.connections.ConnectionController(this) }
     override fun onCreate() {
         super.onCreate()
         AliyunPush.initialize(this)

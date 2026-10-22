@@ -159,6 +159,16 @@ Linux is not supported.
 
 `clients/android` is a native Kotlin + Jetpack Compose client with connection
 management, server launchers, multiple sessions, scrollback and text selection.
+Connected servers are managed at application level: returning to the session or
+server list keeps the server WebSockets open. Leaving a terminal, switching to
+chat, or backgrounding the app detaches its terminal viewport so other clients
+regain their screen size. Opening the terminal again attaches it automatically.
+The server list shows each connection's state and offers reconnect/disconnect.
+Background connections are enabled by default and use a foreground service with
+an ongoing notification; its action disconnects all servers. Settings can limit
+connections to the foreground instead. Cloud push remains a separate fallback
+when a server is unreachable or Android stops the process.
+
 The UI and terminal follow the system using `2026 Light` / `2026 Dark`. The
 terminal viewport shrinks above the soft keyboard, and shortcut keys scroll
 horizontally in two rows by default. The home screen settings icon combines

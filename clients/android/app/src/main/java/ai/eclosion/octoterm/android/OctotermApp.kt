@@ -3,6 +3,7 @@ package ai.eclosion.octoterm.android
 import android.Manifest
 import android.content.Intent
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
@@ -25,6 +26,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -67,12 +69,14 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
         notificationCheck++
     }
     // Also handles upgrading a previously signed-in APK that did not contain Firebase configuration.
-    LaunchedEffect(cloud.status?.email, cloud.askNotificationPermission, pushRegistration) {
+    val hasBackgroundConnections = state.keepConnectionsInBackground && state.connectionStatuses.values.any { it.active }
+    LaunchedEffect(cloud.status?.email, cloud.askNotificationPermission, pushRegistration, hasBackgroundConnections) {
         val explicitRequest = cloud.askNotificationPermission
         if (explicitRequest) cloudViewModel.consumePermissionRequest()
-        if (cloud.status != null && pushAvailable && pushRegistration.registered) {
+        if (hasBackgroundConnections || (cloud.status != null && pushAvailable && pushRegistration.registered)) {
             AgentNotifications.ensureChannel(context)
-            if (Build.VERSION.SDK_INT >= 33 && !AgentNotifications.enabled(context) &&
+            if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context,
+                    Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
                 (explicitRequest || !permissionPreferences.getBoolean("permission_requested", false))) {
                 permissionPreferences.edit().putBoolean("permission_requested", true).apply()
                 permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
@@ -118,6 +122,8 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onAddFromClipboard = viewModel::addFromClipboard,
                     onAddManually = viewModel::addManually,
                     onConnect = viewModel::connect,
+                    onReconnect = viewModel::reconnect,
+                    onDisconnect = viewModel::disconnectServer,
                     onEdit = viewModel::edit,
                     onRequestDelete = viewModel::requestDelete,
                     onConfirmDelete = viewModel::confirmDelete,
@@ -150,6 +156,8 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                     onExtraKeyRows = viewModel::setExtraKeyRows,
                     agentKeyLayouts = state.agentKeyLayouts,
                     onAgentKeyLayout = viewModel::setAgentKeyLayout,
+                    keepConnectionsInBackground = state.keepConnectionsInBackground,
+                    onKeepConnectionsInBackground = viewModel::setKeepConnectionsInBackground,
                 )
             }
             AppScreen.CloudAccount -> {
@@ -195,7 +203,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
             is AppScreen.Server -> {
                 val connection = viewModel.connection(screen.connectionId)
                 if (connection == null) {
-                    viewModel.disconnect()
+                    viewModel.leaveServer()
                 } else if (state.attachedId != null && viewModel.activeEmulator() != null) {
                     val activeId = state.attachedId
                     val emulator = viewModel.activeEmulator()
@@ -231,7 +239,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         onToggleChat = viewModel::toggleChat,
                     )
                 } else {
-                    BackHandler(onBack = viewModel::disconnect)
+                    BackHandler(onBack = viewModel::leaveServer)
                     ServerHomeScreen(
                         connection = connection,
                         sessions = state.sessions,
@@ -244,7 +252,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         onRenameDraft = viewModel::onRenameDraft,
                         onConfirmRename = viewModel::confirmRename,
                         onDismissRename = viewModel::dismissRename,
-                        onBack = viewModel::disconnect,
+                        onBack = viewModel::leaveServer,
                         onNewSession = viewModel::openLauncherMenu,
                         onDismissLaunchers = viewModel::dismissLauncherMenu,
                         onPickLauncher = viewModel::newSession,
@@ -283,6 +291,7 @@ private fun android.content.Context.messageText(message: UserMessage): String {
         UserMessage.Timeout -> getString(R.string.msg_timeout)
         UserMessage.Closed -> getString(R.string.msg_closed)
         UserMessage.Unexpected -> getString(R.string.msg_unexpected)
+        UserMessage.BackgroundUnavailable -> getString(R.string.connections_background_unavailable)
         UserMessage.Copied -> getString(R.string.msg_copied)
         UserMessage.ImportFailed -> getString(R.string.msg_import_failed)
         UserMessage.TooManySessions -> getString(R.string.msg_too_many_sessions)

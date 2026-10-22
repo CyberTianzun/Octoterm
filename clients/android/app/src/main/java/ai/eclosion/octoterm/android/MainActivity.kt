@@ -51,8 +51,23 @@ class MainActivity : ComponentActivity() {
         handleIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        connectionViewModel.onUiForegroundChanged(true)
+    }
+
+    override fun onStop() {
+        connectionViewModel.onUiForegroundChanged(false)
+        super.onStop()
+    }
+
     private fun handleIntent(intent: Intent?) {
         intent ?: return
+        if (intent.action == ai.eclosion.octoterm.android.connection.ConnectionService.OPEN_CONNECTIONS) {
+            intent.action = null
+            connectionViewModel.leaveServer()
+            return
+        }
         val callback = intent.dataString
         if (intent.action == Intent.ACTION_VIEW && callback != null && isCloudCallback(callback)) {
             intent.data = null

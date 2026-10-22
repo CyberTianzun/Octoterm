@@ -3,6 +3,22 @@
     <string name="app_name">Octoterm</string>
 
     <string name="servers_title">Servers</string>
+    <string name="connection_connected">Connected</string>
+    <string name="connection_disconnected">Disconnected</string>
+    <string name="connection_connecting">Connecting…</string>
+    <string name="connection_reconnecting">Reconnecting…</string>
+    <string name="connection_failed">Connection failed</string>
+    <string name="connection_open">Open server</string>
+    <string name="connection_connect">Connect</string>
+    <string name="connection_reconnect">Reconnect</string>
+    <string name="connection_disconnect">Disconnect</string>
+    <string name="connections_disconnect_all">Disconnect all</string>
+    <string name="connections_channel">Server connections</string>
+    <string name="connections_notification_title">Octoterm server connections</string>
+    <string name="connections_notification_summary">%1$d connected, %2$d connecting or reconnecting</string>
+    <string name="connections_background_title">Keep server connections in background</string>
+    <string name="connections_background_hint">Keep receiving status on the server list and in the background. Uses an ongoing notification. When disabled, connections run only in the foreground.</string>
+    <string name="connections_background_unavailable">Could not start the background connection service. Retry while the app is open.</string>
     <string name="servers_add">Add server</string>
     <string name="servers_add_clipboard">Add from clipboard</string>
     <string name="servers_add_manual">Add manually</string>

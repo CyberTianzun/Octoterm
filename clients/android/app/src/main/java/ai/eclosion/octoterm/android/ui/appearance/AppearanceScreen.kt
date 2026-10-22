@@ -22,6 +22,9 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.Switch
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +60,8 @@ fun AppearanceScreen(
     onExtraKeyRows: (Int) -> Unit,
     agentKeyLayouts: Map<String, AgentKeyLayout>,
     onAgentKeyLayout: (String, AgentKeyLayout) -> Unit,
+    keepConnectionsInBackground: Boolean,
+    onKeepConnectionsInBackground: (Boolean) -> Unit,
 ) {
     var scrollDraft by remember(appearance.scrollback) { mutableStateOf(appearance.scrollback.toString()) }
     val systemThemeName = AppearanceCodec.default(isSystemInDarkTheme()).name
@@ -82,6 +87,14 @@ fun AppearanceScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 8.dp),
         ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.weight(1f).padding(end = 12.dp)) {
+                    Text(stringResource(R.string.connections_background_title), style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(R.string.connections_background_hint), style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = keepConnectionsInBackground, onCheckedChange = onKeepConnectionsInBackground)
+            }
             Text(stringResource(R.string.locale_action), style = MaterialTheme.typography.titleMedium)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LocalePref.entries.forEach { pref ->
