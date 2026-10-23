@@ -9,31 +9,55 @@ class AppearanceCodecTest {
     fun defaultsSelect2026ThemeForSystemMode() {
         assertEquals(AppearanceCodec.builtin("2026 Light"), AppearanceCodec.default(prefersDark = false))
         assertEquals(AppearanceCodec.builtin("2026 Dark"), AppearanceCodec.default(prefersDark = true))
+        assertEquals(TermFontKind.JetBrainsMono, AppearanceCodec.default().font)
     }
 
     @Test
     fun systemThemeChangesKeepFontAndScrollback() {
         val customized = AppearanceCodec.default(false)
-            .withFontSize(18f).withFont(TermFontKind.Serif).withScrollback(5000)
+            .withFontSize(18f).withFont(TermFontKind.GoogleSansCode).withScrollback(5000)
         val dark = customized.withTheme(AppearanceCodec.default(true))
         assertEquals("2026 Dark", dark.name)
         assertEquals(18f, dark.fontSizeSp)
-        assertEquals(TermFontKind.Serif, dark.font)
+        assertEquals(TermFontKind.GoogleSansCode, dark.font)
         assertEquals(5000, dark.scrollback)
         assertEquals(customized, dark.withTheme(AppearanceCodec.default(false)))
     }
 
     @Test
-    fun roundTripKeepsColorsSizeAndScrollback() {
+    fun roundTripKeepsColorsSizeFontAndScrollback() {
         val theme = AppearanceCodec.builtin("2026 Dark")!!
-        val edited = theme.withFontSize(18f).withScrollback(5000).withFont(TermFontKind.Mono)
-        val back = AppearanceCodec.importJson(AppearanceCodec.exportJson(edited))
-        assertEquals(edited.name, back!!.name)
-        assertEquals(edited.foreground, back.foreground)
-        assertEquals(edited.background, back.background)
-        assertEquals(edited.ansi, back.ansi)
-        assertEquals(18f, back.fontSizeSp)
-        assertEquals(5000, back.scrollback)
+        for (kind in TermFontKind.entries) {
+            val edited = theme.withFontSize(18f).withScrollback(5000).withFont(kind)
+            val back = AppearanceCodec.importJson(AppearanceCodec.exportJson(edited))!!
+            assertEquals(edited.name, back.name)
+            assertEquals(edited.foreground, back.foreground)
+            assertEquals(edited.background, back.background)
+            assertEquals(edited.ansi, back.ansi)
+            assertEquals(18f, back.fontSizeSp)
+            assertEquals(kind, back.font)
+            assertEquals(5000, back.scrollback)
+        }
+    }
+
+    @Test
+    fun webFontStacksImportAsMatchingBuiltinFont() {
+        assertEquals(
+            TermFontKind.JetBrainsMono,
+            AppearanceCodec.importJson("""{"font":{"family":"\"JetBrains Mono\", Consolas, monospace"}}""")!!.font,
+        )
+        assertEquals(
+            TermFontKind.GoogleSansCode,
+            AppearanceCodec.importJson("""{"font":{"family":"\"Google Sans Code\", monospace"}}""")!!.font,
+        )
+        assertEquals(
+            TermFontKind.ZedMono,
+            AppearanceCodec.importJson("""{"font":{"family":"\"Zed Mono\", monospace"}}""")!!.font,
+        )
+        assertEquals(
+            TermFontKind.Mono,
+            AppearanceCodec.importJson("""{"font":{"family":"Consolas, monospace"}}""")!!.font,
+        )
     }
 
     @Test

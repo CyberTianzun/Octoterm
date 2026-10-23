@@ -17,6 +17,7 @@ import {
   sanitizeTheme,
   DEFAULT_FONT_FAMILY,
 } from "./config";
+import { BUILTIN_FONTS, ensureFontLoaded, matchBuiltinFont } from "./fonts";
 import { knownThemes, loadCatalog, catalogLoaded, resolveTheme } from "./theme-catalog";
 import { LOCALES, LOCALE_NAMES, type LocalePref, type MsgKey, subscribe, t } from "./i18n";
 import {
@@ -215,6 +216,25 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const cfg = host.get();
     const wrap = el("div", "set-pane");
 
+    const presetIds = [...BUILTIN_FONTS.map((f) => f.id), "custom"] as const;
+    const exactPreset = BUILTIN_FONTS.find((f) => f.stack === cfg.font.family) ?? matchBuiltinFont(cfg.font.family);
+    const activePresetId =
+      exactPreset && (exactPreset.stack === cfg.font.family || exactPreset.url !== undefined)
+        ? exactPreset.id
+        : "custom";
+    const presetSelect = select(
+      presetIds,
+      activePresetId,
+      (id) => BUILTIN_FONTS.find((f) => f.id === id)?.label ?? t("settings.font.presetCustom"),
+    );
+    presetSelect.addEventListener("change", () => {
+      const picked = BUILTIN_FONTS.find((f) => f.id === presetSelect.value);
+      if (picked) {
+        patch((c) => ({ ...c, font: { ...c.font, family: picked.stack } }));
+        render();
+      }
+    });
+
     const family = el("input", "set-wide");
     family.type = "text";
     family.value = cfg.font.family;
@@ -223,9 +243,12 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     const checkAvail = (stack: string) => {
       const first = firstFamily(stack);
       const generic = ["monospace", "ui-monospace", "serif", "sans-serif", "system-ui"].includes(first);
+      const isBuiltin = BUILTIN_FONTS.some(
+        (f) => f.url && f.family.toLowerCase() === first.toLowerCase(),
+      );
       if (first === "") {
         avail.textContent = "";
-      } else if (generic || document.fonts?.check?.(`12px "${first}"`)) {
+      } else if (generic || isBuiltin || document.fonts?.check?.(`12px "${first}"`)) {
         avail.textContent = t("settings.font.available", { name: first });
         avail.className = "set-note ok";
       } else {
@@ -234,11 +257,13 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
       }
     };
     checkAvail(cfg.font.family);
+    void ensureFontLoaded(cfg.font.family).then(() => checkAvail(family.value));
     family.addEventListener("change", () => {
       patch((c) => ({ ...c, font: { ...c.font, family: family.value } }));
       // sanitize 可能改写了输入(剔非法字符/空值回退),回读一次让输入框说实话
       family.value = host.get().font.family;
       checkAvail(family.value);
+      render();
     });
 
     const reset = el("button", undefined, t("settings.font.reset"));
@@ -279,6 +304,7 @@ export function mountSettings(host: SettingsHost): { open: () => void } {
     preview.textContent = "iIlL1 oO0 `'\" ─┼┤├ 中文对齐 => != >= 0x1F ~$#@";
 
     wrap.append(
+      row(t("settings.font.preset"), presetSelect, t("settings.font.presetHint")),
       row(t("settings.font.family"), family, t("settings.font.familyHint")),
       avail,
       row("", reset),
