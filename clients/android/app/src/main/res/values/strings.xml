@@ -132,9 +132,12 @@
     <string name="appearance_theme_system">跟随系统（%1$s）</string>
     <string name="appearance_font_size">字号 %1$d</string>
     <string name="appearance_font">字体</string>
-    <string name="appearance_font_mono">等宽</string>
-    <string name="appearance_font_serif">衬线</string>
-    <string name="appearance_font_sans">无衬线</string>
+    <string name="appearance_font_jetbrains_mono" translatable="false">JetBrains Mono</string>
+    <string name="appearance_font_google_sans_code" translatable="false">Google Sans Code</string>
+    <string name="appearance_font_zed_mono" translatable="false">Zed Mono</string>
+    <string name="appearance_font_mono">系统等宽 (Monospace)</string>
+
+
     <string name="appearance_scrollback">回滚行数</string>
     <string name="appearance_scrollback_hint">0 到 200000</string>
     <string name="appearance_import_hint">导出的 JSON 和网页端是同一份格式。导入会读剪贴板。</string>

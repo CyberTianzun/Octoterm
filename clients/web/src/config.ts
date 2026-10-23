@@ -14,6 +14,7 @@
  */
 import type { ITheme, ITerminalOptions, FontWeight } from "@xterm/xterm";
 import { BUILTIN_THEMES, DEFAULT_THEMES } from "./themes/builtin";
+import { BUILTIN_FONTS } from "./fonts";
 import { LOCALES, type LocalePref, t } from "./i18n";
 
 export const CONFIG_VERSION = 1;
@@ -72,8 +73,7 @@ const FONT_WEIGHTS: readonly string[] = [
   "normal", "bold", "100", "200", "300", "400", "500", "600", "700", "800", "900",
 ];
 
-export const DEFAULT_FONT_FAMILY =
-  'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
+export const DEFAULT_FONT_FAMILY = BUILTIN_FONTS[0].stack;
 
 /**
  * 默认配置。`prefersDark` 决定默认主题取 2026 Dark 还是 2026 Light。

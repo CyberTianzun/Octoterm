@@ -10,6 +10,7 @@ import { execSync } from "node:child_process";
 const here = dirname(fileURLToPath(import.meta.url));
 for (const [src, out] of [
   ["src/config.ts", "test/.config.build.mjs"],
+  ["src/fonts.ts", "test/.fonts.build.mjs"],
   // 默认主题跟随系统亮暗那几条要拿真的内置主题表和真的配色派生来验
   ["src/themes/builtin.ts", "test/.builtin.build.mjs"],
   ["src/appearance.ts", "test/.appearance.build.mjs"],
@@ -230,4 +231,48 @@ test("toTerminalOptions 映射到 xterm 选项", () => {
   // 不能悄悄带上构造期才该设的选项 —— term.options 是逐键合并的
   assert.equal("allowProposedApi" in o, false);
   assert.equal("cols" in o, false);
+
+  // 内置字体按需单字体加载校验
+});
+
+test("内置字体按需加载且内存中最多保留一个自定义字体", async () => {
+  const { BUILTIN_FONTS, ensureFontLoaded, getActiveLoadedFontId, matchBuiltinFont } = await import("./.fonts.build.mjs");
+  assert.equal(matchBuiltinFont('"JetBrains Mono", monospace')?.id, "jetbrains-mono");
+  assert.equal(matchBuiltinFont('"Google Sans Code", monospace')?.id, "google-sans-code");
+  assert.equal(matchBuiltinFont('"Zed Mono", monospace')?.id, "zed-mono");
+  assert.equal(matchBuiltinFont("Consolas, monospace")?.id, "monospace");
+
+  const inMemory = new Set();
+  globalThis.FontFace = class FakeFontFace {
+    constructor(family, source) {
+      this.family = family;
+      this.source = source;
+    }
+    async load() {
+      return this;
+    }
+  };
+  globalThis.document = {
+    fonts: {
+      add: (f) => inMemory.add(f),
+      delete: (f) => inMemory.delete(f),
+    },
+  };
+  try {
+    assert.equal(await ensureFontLoaded(BUILTIN_FONTS[0].stack), true);
+    assert.equal(inMemory.size, 1);
+    assert.equal(getActiveLoadedFontId(), "jetbrains-mono");
+    assert.equal(await ensureFontLoaded(BUILTIN_FONTS[0].stack), false);
+    assert.equal(inMemory.size, 1);
+    assert.equal(await ensureFontLoaded(BUILTIN_FONTS[1].stack), true);
+    assert.equal(inMemory.size, 1);
+    assert.equal([...inMemory][0].family, "Google Sans Code");
+    assert.equal(getActiveLoadedFontId(), "google-sans-code");
+    assert.equal(await ensureFontLoaded(BUILTIN_FONTS[3].stack), true);
+    assert.equal(inMemory.size, 0);
+    assert.equal(getActiveLoadedFontId(), null);
+  } finally {
+    delete globalThis.FontFace;
+    delete globalThis.document;
+  }
 });

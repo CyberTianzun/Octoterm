@@ -153,7 +153,7 @@ fun AppearanceScreen(
                 style = MaterialTheme.typography.titleMedium,
                 modifier = Modifier.padding(top = 8.dp),
             )
-            Column(Modifier.padding(top = 8.dp)) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(top = 8.dp)) {
                 TermFontKind.entries.forEach { kind ->
                     FilterChip(
                         selected = appearance.font == kind,
@@ -162,14 +162,14 @@ fun AppearanceScreen(
                             Text(
                                 stringResource(
                                     when (kind) {
+                                        TermFontKind.JetBrainsMono -> R.string.appearance_font_jetbrains_mono
+                                        TermFontKind.GoogleSansCode -> R.string.appearance_font_google_sans_code
+                                        TermFontKind.ZedMono -> R.string.appearance_font_zed_mono
                                         TermFontKind.Mono -> R.string.appearance_font_mono
-                                        TermFontKind.Serif -> R.string.appearance_font_serif
-                                        TermFontKind.Sans -> R.string.appearance_font_sans
                                     },
                                 ),
                             )
                         },
-                        modifier = Modifier.padding(end = 8.dp, bottom = 8.dp),
                     )
                 }
             }

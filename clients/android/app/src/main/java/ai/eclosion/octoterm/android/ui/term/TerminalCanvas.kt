@@ -88,13 +88,14 @@ fun TerminalCanvas(
                     val top = oy + y * cellH
                     bgPaint.color = if (selected) appearance.selection else (bg or 0xFF000000.toInt())
                     native.drawRect(left, top, left + cellW * cell.width, top + cellH, bgPaint)
-                    if (cell.ch != ' ') {
-                        textPaint.color = (fg or 0xFF000000.toInt())
+                    if (cell.codepoint != ' '.code && cell.codepoint != 0) {
+                        val alpha = if (cell.attrs and Attr.DIM != 0) 0x99000000.toInt() else 0xFF000000.toInt()
+                        textPaint.color = (fg and 0x00FFFFFF) or alpha
                         textPaint.isFakeBoldText = cell.attrs and Attr.BOLD != 0
                         textPaint.textSkewX = if (cell.attrs and Attr.ITALIC != 0) -0.2f else 0f
                         textPaint.isUnderlineText = cell.attrs and Attr.UNDERLINE != 0
                         textPaint.isStrikeThruText = cell.attrs and Attr.STRIKE != 0
-                        native.drawText(cell.ch.toString(), left, top + baseline, textPaint)
+                        native.drawText(cell.glyphText(), left, top + baseline, textPaint)
                     }
                 }
             }

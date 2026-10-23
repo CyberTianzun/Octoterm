@@ -201,6 +201,9 @@ const zh = {
   "settings.theme.note":
     "主题数据来自 mbadolato/iTerm2-Color-Schemes(MIT)。想要目录里没有的配色,在「导入 / 导出」里直接改 theme.colors 即可。",
 
+  "settings.font.preset": "内置字体",
+  "settings.font.presetHint": "按需加载单个字体到内存,与移动端保持一致",
+  "settings.font.presetCustom": "自定义字体栈",
   "settings.font.family": "字体栈",
   "settings.font.familyHint": "CSS font-family,逗号分隔",
   "settings.font.available": "✓ 首选族「{name}」可用",
@@ -436,6 +439,9 @@ const en: Record<MsgKey, string> = {
   "settings.theme.note":
     "Theme data comes from mbadolato/iTerm2-Color-Schemes (MIT). For a palette the catalog doesn't have, edit theme.colors directly under “Import / Export”.",
 
+  "settings.font.preset": "Built-in font",
+  "settings.font.presetHint": "Loads only the selected font into memory, matching mobile",
+  "settings.font.presetCustom": "Custom font stack",
   "settings.font.family": "Font stack",
   "settings.font.familyHint": "CSS font-family, comma separated",
   "settings.font.available": "✓ Preferred family “{name}” is available",

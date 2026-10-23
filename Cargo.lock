@@ -2928,6 +2928,9 @@ dependencies = [
 [[package]]
 name = "octoterm-client-core"
 version = "0.2.3"
+dependencies = [
+ "alacritty_terminal",
+]
 
 [[package]]
 name = "octoterm-cloud-client"
@@ -2948,6 +2951,7 @@ name = "octoterm-cloud-ffi"
 version = "0.2.3"
 dependencies = [
  "axum",
+ "octoterm-client-core",
  "octoterm-cloud-client",
  "serde_json",
  "tempfile",

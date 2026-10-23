@@ -132,9 +132,9 @@
     <string name="appearance_theme_system">Follow system (%1$s)</string>
     <string name="appearance_font_size">Font size %1$d</string>
     <string name="appearance_font">Font</string>
-    <string name="appearance_font_mono">Monospace</string>
-    <string name="appearance_font_serif">Serif</string>
-    <string name="appearance_font_sans">Sans</string>
+    <string name="appearance_font_mono">System Monospace</string>
+
+
     <string name="appearance_scrollback">Scrollback</string>
     <string name="appearance_scrollback_hint">0 to 200000</string>
     <string name="appearance_import_hint">The exported JSON is the same format as the web client. Import reads the clipboard.</string>

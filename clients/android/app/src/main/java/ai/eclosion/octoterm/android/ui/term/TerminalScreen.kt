@@ -19,7 +19,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -38,7 +37,6 @@ import androidx.compose.ui.platform.LocalViewConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
@@ -47,14 +45,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import ai.eclosion.octoterm.android.R
 import ai.eclosion.octoterm.android.ui.components.AppBarTitle
 import ai.eclosion.octoterm.android.appearance.TermAppearance
-import ai.eclosion.octoterm.android.appearance.TermFontKind
+import ai.eclosion.octoterm.android.appearance.TermFontLoader
+import ai.eclosion.octoterm.android.term.AlacrittyTerm
 import ai.eclosion.octoterm.android.term.TermFrame
 import ai.eclosion.octoterm.android.term.TermGeometry
 import ai.eclosion.octoterm.android.term.TermSelection
 import ai.eclosion.octoterm.android.term.TerminalView
 import ai.eclosion.octoterm.android.term.TerminalKeyboard
 import ai.eclosion.octoterm.android.term.KeyModifiers
-import ai.eclosion.octoterm.android.term.VtEmulator
 import ai.eclosion.octoterm.android.term.AgentKeyLayout
 import ai.eclosion.octoterm.android.ui.connections.ChatUiState
 
@@ -65,7 +63,7 @@ fun TerminalScreen(
     activeId: Long,
     reconnecting: Boolean,
     serverOs: String,
-    emulator: VtEmulator,
+    term: AlacrittyTerm,
     frame: TermFrame,
     generation: Long,
     appearance: TermAppearance,
@@ -102,12 +100,8 @@ fun TerminalScreen(
     val density = LocalDensity.current
     val touchSlop = LocalViewConfiguration.current.touchSlop
     val textSizePx = with(density) { appearance.fontSizeSp.sp.toPx() }
-    val typeface = remember(appearance.font) {
-        when (appearance.font) {
-            TermFontKind.Mono -> Typeface.MONOSPACE
-            TermFontKind.Serif -> Typeface.SERIF
-            TermFontKind.Sans -> Typeface.SANS_SERIF
-        }
+    val typeface = remember(context, appearance.font) {
+        TermFontLoader.load(context, appearance.font)
     }
     val paint = remember(textSizePx, typeface) { measureTerm(textSizePx, typeface) }
     fun clearModifiers() {
@@ -199,7 +193,7 @@ fun TerminalScreen(
                     if (!reconnecting) {
                         val modifiers = stroke.modifiers + softModifiers()
                         onInput(keyboard.tap(
-                            stroke.copy(modifiers = modifiers), emulator.applicationCursor, emulator.modifyOtherKeys,
+                            stroke.copy(modifiers = modifiers), term.applicationCursor, term.modifyOtherKeys,
                         ))
                         clearModifiers()
                     }
@@ -250,7 +244,8 @@ fun TerminalScreen(
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx).also { view ->
-                            view.emulator = emulator
+                            view.applicationCursor = term.applicationCursor
+                            view.modifyOtherKeys = term.modifyOtherKeys
                             termView = view
                         }
                     },
@@ -258,7 +253,8 @@ fun TerminalScreen(
                         if (view.keyboard !== keyboard) view.releaseKeys()
                         view.keyboard = keyboard
                         view.inputEnabled = !reconnecting
-                        view.emulator = emulator
+                        view.applicationCursor = term.applicationCursor
+                        view.modifyOtherKeys = term.modifyOtherKeys
                         view.contentDescription = terminalHint
                         view.softModifiers = softModifiers()
                         view.onModifiersConsumed = ::clearModifiers

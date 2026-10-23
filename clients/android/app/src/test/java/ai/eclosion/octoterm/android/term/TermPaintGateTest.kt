@@ -54,14 +54,14 @@ class TermFrameTest {
     @Test
     fun emptyAndClearedHaveNoContent() {
         assertFalse(TermFrame.Empty.hasContent())
-        val t = VtEmulator(20, 5)
+        val t = AlacrittyTerm(20, 5)
         t.write("\u001b[0m\u001b[?25l\u001b[2J\u001b[H".toByteArray())
         assertFalse(TermFrame.capture(t).hasContent())
     }
 
     @Test
     fun printedTextCountsAsContent() {
-        val t = VtEmulator(20, 5)
+        val t = AlacrittyTerm(20, 5)
         t.write("hi".toByteArray())
         assertTrue(TermFrame.capture(t).hasContent())
     }

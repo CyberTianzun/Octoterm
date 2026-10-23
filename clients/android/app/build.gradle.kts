@@ -24,8 +24,11 @@ val aliyunConfig = if (aliyunServicesFile.isFile) {
     require(config["emas.packageName"] == "ai.eclosion.octoterm.android") { "EMAS package name does not match Android applicationId" }
     config
 } else emptyMap<Any, Any>()
-// 签名文件放在仓库同级的 OctotermSecrets，其它机器保持这个相对位置即可。
-val signingPropertiesFile = File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties")
+// 签名文件放在仓库同级的 OctotermSecrets，其它机器保持这个相对位置即可（兼顾 .worktrees 子目录）。
+val signingPropertiesFile = listOfNotNull(
+    File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties"),
+    repoRoot.parentFile?.parentFile?.parentFile?.let { File(it, "OctotermSecrets/octoterm-release.signing.properties") },
+).firstOrNull { it.isFile } ?: File(repoRoot.parentFile, "OctotermSecrets/octoterm-release.signing.properties")
 val signingProperties = Properties()
 val hasOctotermSigning = signingPropertiesFile.isFile
 if (hasOctotermSigning) {
@@ -47,6 +50,7 @@ val buildCloudFfi by tasks.registering(Exec::class) {
         ffiJniDir.get().asFile.absolutePath,
         ffiKotlinDir.get().asFile.absolutePath,
     )
+    inputs.dir(File(repoRoot, "crates/client-core/src"))
     inputs.dir(File(repoRoot, "crates/cloud-ffi/src"))
     inputs.dir(File(repoRoot, "crates/cloud-client/src"))
     inputs.file(File(repoRoot, "scripts/build-android-ffi.sh"))
@@ -123,6 +127,17 @@ android {
         compose = true
         buildConfig = true
     }
+
+    testOptions {
+        unitTests.all {
+            val jnaPaths = listOfNotNull(
+                System.getenv("CARGO_TARGET_DIR")?.let { File(it, "debug").absolutePath },
+                File(repoRoot, "target/debug").absolutePath,
+                repoRoot.parentFile?.parentFile?.let { File(it, "target/debug").absolutePath },
+            ).distinct().joinToString(File.pathSeparator)
+            it.systemProperty("jna.library.path", jnaPaths)
+        }
+    }
 }
 
 dependencies {
@@ -142,6 +157,7 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     testImplementation(libs.junit)
     testImplementation(libs.org.json)
+    testImplementation(libs.jna)
     implementation(libs.jna) { artifact { type = "aar" } }
     implementation(platform(libs.firebase.bom))
     implementation(libs.firebase.messaging)

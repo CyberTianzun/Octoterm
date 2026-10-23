@@ -81,15 +81,15 @@ class TerminalKeyboardTest {
 
     @Test
     fun imeTextIsNeverBracketedPasteAndExplicitCtrlJStillWorks() {
-        val emulator = VtEmulator()
-        emulator.write("\u001b[?2004h".toByteArray())
-        assertTrue(emulator.bracketedPaste)
+        val term = AlacrittyTerm()
+        term.write("\u001b[?2004h".toByteArray())
+        assertTrue(term.bracketedPaste)
         val keyboard = TerminalKeyboard("windows")
         assertEquals("j", keyboard.committedText("j").text())
         assertEquals("你好😀", keyboard.committedText("你好😀").text())
         assertEquals("\u001b[74;36;10;1;8;1_\u001b[74;36;10;0;8;1_",
             keyboard.committedText("j", KeyModifiers(ctrl = true)).text())
-        assertEquals("\u001b[200~j\u001b[201~", emulator.encodePaste("j").text())
+        assertEquals("\u001b[200~j\u001b[201~", term.encodePaste("j").text())
     }
 
     @Test

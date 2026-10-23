@@ -3,7 +3,12 @@ package ai.eclosion.octoterm.android.appearance
 import ai.eclosion.octoterm.android.term.Color
 import org.json.JSONObject
 
-enum class TermFontKind { Mono, Serif, Sans }
+enum class TermFontKind(val assetPath: String?) {
+    JetBrainsMono("fonts/JetBrainsMono-Regular.ttf"),
+    GoogleSansCode("fonts/GoogleSansCode-Regular.ttf"),
+    ZedMono("fonts/ZedMono-Regular.ttf"),
+    Mono(null),
+}
 
 /**
  * 纯客户端外观。和 web 的 OctoConfig 同一份 JSON：颜色、字号、回滚行数。
@@ -45,6 +50,8 @@ data class TermAppearance(
 
 object AppearanceCodec {
     const val VERSION = 1
+    private const val SYSTEM_MONO_STACK =
+        "ui-monospace, SFMono-Regular, \"SF Mono\", Menlo, Consolas, \"DejaVu Sans Mono\", monospace"
 
     fun default(prefersDark: Boolean = true): TermAppearance = if (prefersDark) dark2026() else light2026()
 
@@ -141,7 +148,7 @@ object AppearanceCodec {
             0x7AA2F7, 0xBB9AF7, 0x7DCFFF, 0xC0CAF5,
         ),
         fontSizeSp = 12f,
-        font = TermFontKind.Mono,
+        font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )
 
@@ -158,7 +165,7 @@ object AppearanceCodec {
             0x3B8EEA, 0xD670D6, 0x29B8DB, 0xE5E5E5,
         ),
         fontSizeSp = 12f,
-        font = TermFontKind.Mono,
+        font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )
 
@@ -175,22 +182,23 @@ object AppearanceCodec {
             0x0451A5, 0xBC05BC, 0x0598BC, 0xA5A5A5,
         ),
         fontSizeSp = 12f,
-        font = TermFontKind.Mono,
+        font = TermFontKind.JetBrainsMono,
         scrollback = 20_000,
     )
 
     private fun fontFamily(kind: TermFontKind): String = when (kind) {
-        TermFontKind.Mono -> "monospace"
-        TermFontKind.Serif -> "serif"
-        TermFontKind.Sans -> "sans-serif"
+        TermFontKind.JetBrainsMono -> "\"JetBrains Mono\", $SYSTEM_MONO_STACK"
+        TermFontKind.GoogleSansCode -> "\"Google Sans Code\", $SYSTEM_MONO_STACK"
+        TermFontKind.ZedMono -> "\"Zed Mono\", $SYSTEM_MONO_STACK"
+        TermFontKind.Mono -> SYSTEM_MONO_STACK
     }
 
     private fun fontKind(family: String): TermFontKind {
         val lower = family.lowercase()
         return when {
-            "mono" in lower -> TermFontKind.Mono
-            "sans" in lower -> TermFontKind.Sans
-            "serif" in lower -> TermFontKind.Serif
+            "jetbrains" in lower -> TermFontKind.JetBrainsMono
+            "google sans code" in lower || "googlesans" in lower -> TermFontKind.GoogleSansCode
+            "zed" in lower -> TermFontKind.ZedMono
             else -> TermFontKind.Mono
         }
     }

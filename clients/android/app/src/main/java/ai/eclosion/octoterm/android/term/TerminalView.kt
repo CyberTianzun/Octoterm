@@ -19,7 +19,8 @@ class TerminalView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
 ) : View(context, attrs) {
-    var emulator: VtEmulator = VtEmulator()
+    var applicationCursor: Boolean = false
+    var modifyOtherKeys: Int = 0
 
     var onInput: (ByteArray) -> Unit = {}
     var keyboard: TerminalKeyboard = TerminalKeyboard("")
@@ -80,7 +81,7 @@ class TerminalView @JvmOverloads constructor(
                     val value = text.toString()
                     val asciiKey = value.length == 1 && value[0].code in 32..126
                     val modifiers = if (composing && !asciiKey) KeyModifiers() else softModifiers
-                    emit(keyboard.committedText(value, modifiers, emulator.modifyOtherKeys))
+                    emit(keyboard.committedText(value, modifiers, modifyOtherKeys))
                     if ((!composing || asciiKey) && value.length == 1 && value[0].code < 128 &&
                         TerminalKey.fromAscii(value[0]) != null
                     ) consumeModifiers()
@@ -106,7 +107,7 @@ class TerminalView @JvmOverloads constructor(
                     repeat(beforeLength.coerceIn(0, 200_000)) {
                         emit(keyboard.tap(
                             KeyStroke(TerminalKey.Backspace, modifiers = softModifiers),
-                            modifyOtherKeys = emulator.modifyOtherKeys,
+                            modifyOtherKeys = modifyOtherKeys,
                         ))
                     }
                     repeat(afterLength.coerceIn(0, 200_000)) {
@@ -191,7 +192,7 @@ class TerminalView @JvmOverloads constructor(
         ) unicode = key.character
         val modifiers = AndroidKeyMapper.modifiers(event) + softModifiers
         emit(keyboard.keyDown(
-            id, KeyStroke(key, unicode, modifiers), emulator.applicationCursor, emulator.modifyOtherKeys,
+            id, KeyStroke(key, unicode, modifiers), applicationCursor, modifyOtherKeys,
         ))
         if (key !in TerminalKey.ShiftLeft..TerminalKey.ScrollLock) consumeModifiers()
         return true

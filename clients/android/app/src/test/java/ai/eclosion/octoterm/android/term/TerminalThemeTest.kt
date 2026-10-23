@@ -18,9 +18,9 @@ class TerminalThemeTest {
         )
         val resets = listOf("empty" to "\u001b[m", "zero" to "\u001b[0m", "repeated-zero" to "\u001b[0;0m")
         for ((colorName, color) in colors) for ((resetName, reset) in resets) {
-            val emulator = VtEmulator(20, 3)
-            emulator.write("${color}X${reset}Y".toByteArray())
-            val cell = emulator.cell(1, 0)
+            val term = AlacrittyTerm(20, 3)
+            term.write("${color}X${reset}Y".toByteArray())
+            val cell = term.cell(1, 0)
             assertEquals("$colorName/$resetName foreground", Color.INDEX_DEFAULT, cell.fgIndex)
             assertEquals("$colorName/$resetName background", Color.INDEX_DEFAULT, cell.bgIndex)
             assertEquals(0, cell.attrs)
@@ -30,12 +30,12 @@ class TerminalThemeTest {
     @Test
     fun pageRedrawAfterTrueColorStillUsesTheSelectedTheme() {
         val dark = AppearanceCodec.builtin("2026 Dark")!!
-        val emulator = VtEmulator(20, 3)
-        emulator.write("First page".toByteArray())
-        assertEquals(dark.foreground, foreground(dark, emulator.cell(0, 0)))
-        emulator.write("\u001b[38;2;1;2;3;48;2;4;5;6mX\u001b[m\u001b[2J\u001b[HNext page".toByteArray())
-        val frame = TermFrame.capture(emulator)
-        assertEquals('N', frame.cells[0][0].ch)
+        val term = AlacrittyTerm(20, 3)
+        term.write("First page".toByteArray())
+        assertEquals(dark.foreground, foreground(dark, term.cell(0, 0)))
+        term.write("\u001b[38;2;1;2;3;48;2;4;5;6mX\u001b[m\u001b[2J\u001b[HNext page".toByteArray())
+        val frame = TermFrame.capture(term)
+        assertEquals("N", frame.cells[0][0].glyphText())
         assertEquals(dark.foreground, foreground(dark, frame.cells[0][0]))
         assertEquals(dark.background, background(dark, frame.cells[0][0]))
     }
@@ -44,21 +44,21 @@ class TerminalThemeTest {
     fun scrollbackPreservesThemedDefaultsAndExplicitRgbAcrossThemeChanges() {
         val dark = AppearanceCodec.builtin("2026 Dark")!!
         val light = AppearanceCodec.builtin("2026 Light")!!
-        val emulator = VtEmulator(12, 2, maxScrollback = 10)
-        emulator.write("\u001b[38;2;1;2;3;48;2;4;5;6mRGB\u001b[0m\r\nDefault\r\nLatest".toByteArray())
-        emulator.scrollBy(1)
-        val frame = TermFrame.capture(emulator)
+        val term = AlacrittyTerm(12, 2, maxScrollback = 10)
+        term.write("\u001b[38;2;1;2;3;48;2;4;5;6mRGB\u001b[0m\r\nDefault\r\nLatest".toByteArray())
+        term.scrollBy(1)
+        val frame = TermFrame.capture(term)
         val rgb = frame.cells[0][0]
         val normal = frame.cells[1][0]
-        assertEquals('R', rgb.ch)
-        assertEquals('D', normal.ch)
+        assertEquals("R", rgb.glyphText())
+        assertEquals("D", normal.glyphText())
         for (theme in listOf(dark, light)) {
             assertEquals(theme.foreground, foreground(theme, normal))
             assertEquals(theme.background, background(theme, normal))
             assertEquals(Color.rgb(1, 2, 3), foreground(theme, rgb))
             assertEquals(Color.rgb(4, 5, 6), background(theme, rgb))
         }
-        emulator.scrollToBottom()
-        assertEquals(dark.foreground, foreground(dark, TermFrame.capture(emulator).cells[0][0]))
+        term.scrollToBottom()
+        assertEquals(dark.foreground, foreground(dark, TermFrame.capture(term).cells[0][0]))
     }
 }

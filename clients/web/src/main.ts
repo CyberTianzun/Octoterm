@@ -11,6 +11,7 @@ import { OctoClient } from "./client";
 import { readToken } from "./auth";
 import { mountCloudStatus } from "./cloud";
 import { type OctoConfig, loadConfig, saveConfig, toTerminalOptions } from "./config";
+import { ensureFontLoaded } from "./fonts";
 import { resolveTheme } from "./theme-catalog";
 import { swallowTerminalQueries, termColors } from "./queries";
 import { applyUiColors } from "./appearance";
@@ -187,12 +188,24 @@ subscribe(() => {
 /* ---------- 外观配置 ---------- */
 
 /** 主题/字体改动的唯一落点:界面变量、主终端、渲染器,一次全刷。 */
+function syncFont(stack: string) {
+  void ensureFontLoaded(stack).then((changed) => {
+    if (changed && term) {
+      term.clearTextureAtlas();
+      term.options.fontFamily = config.font.family;
+      requestAnimationFrame(refit);
+    }
+  });
+}
+
 function applyConfig(next: OctoConfig) {
+
   config = next;
   saveConfig(config);
   // 语言真变了才会通知订阅者(setLocale 对同值是空操作),所以不必自己比一遍
   applyLocale();
   applyUiColors(config);
+syncFont(config.font.family);
   syncSidebarPosition();
   if (term) {
     term.options = toTerminalOptions(config);
@@ -1159,6 +1172,7 @@ client.onControl = (msg) => {
 // 界面配色和文案先于连接落地:否则首帧会闪一下 style.css 里那套写死的默认色,
 // 以及 index.html 里那些还空着的 data-i18n 节点
 applyUiColors(config);
+syncFont(config.font.family);
 applyStaticText();
 syncSidebarPosition();
 setConn(connKey);

@@ -1,6 +1,6 @@
 package ai.eclosion.octoterm.android.term
 
-/** 一次已提交的终端画面。和模拟器解耦，reset/resize 不能改正在显示的帧。 */
+/** 一次已提交的终端画面。和终端状态机解耦，reset/resize 不能改正在显示的帧。 */
 data class TermFrame(
     val cells: Array<Array<Cell>>,
     val cols: Int,
@@ -20,16 +20,20 @@ data class TermFrame(
             cursorVisible = false,
         )
 
-        fun capture(emulator: VtEmulator): TermFrame {
-            val cursor = emulator.viewportCursor()
+        fun capture(term: AlacrittyTerm): TermFrame {
+            val cols = term.cols
+            val rows = term.rows
+            val cx = term.cursorX
+            val cy = term.cursorY + term.scrollOffset
+            val visible = term.cursorVisible && cy in 0 until rows && cx in 0 until cols
             return TermFrame(
-                cells = emulator.snapshot(),
-                cols = emulator.cols,
-                rows = emulator.rows,
-                cursorX = cursor?.first ?: emulator.cursorX,
-                cursorY = cursor?.second ?: emulator.cursorY,
-                cursorVisible = cursor != null,
-                scrollOffset = emulator.scrollOffset,
+                cells = term.snapshot(),
+                cols = cols,
+                rows = rows,
+                cursorX = cx,
+                cursorY = if (visible) cy else term.cursorY,
+                cursorVisible = visible,
+                scrollOffset = term.scrollOffset,
             )
         }
     }
@@ -38,7 +42,7 @@ data class TermFrame(
         if (cols <= 0 || rows <= 0) return false
         for (row in cells) {
             for (cell in row) {
-                if (cell.ch != ' ' && cell.ch != '\u0000') return true
+                if (cell.codepoint != ' '.code && cell.codepoint != 0) return true
                 if (cell.bg != Color.DEFAULT_BG) return true
             }
         }

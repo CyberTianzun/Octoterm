@@ -1,3 +1,5 @@
+pub mod term;
+
 use std::time::Duration;
 
 pub struct Backoff {
