@@ -166,8 +166,7 @@ regain their screen size. Opening the terminal again attaches it automatically.
 The server list shows each connection's state and offers reconnect/disconnect.
 Background connections are enabled by default and use a foreground service with
 an ongoing notification; its action disconnects all servers. Settings can limit
-connections to the foreground instead. Cloud push remains a separate fallback
-when a server is unreachable or Android stops the process.
+connections to the foreground instead.
 
 The UI and terminal follow the system using `2026 Light` / `2026 Dark`. The
 terminal viewport shrinks above the soft keyboard, and shortcut keys scroll
@@ -218,56 +217,7 @@ agent stores for the server user, excluding WSL, other users and custom roots.
 
 ## Octoterm Cloud (optional)
 
-Signing in to Octoterm Cloud lets agent "waiting for you" events reach your phone as push notifications when push is configured in the Android build. Everything works without signing in.
-
-- Cloud never relays terminal data and never sees this machine's access token; a push carries only the session number, agent name and tool name.
-- The sign-in state lives in `cloud.json` in the config directory, with owner-only permissions (0600) on Unix.
-- The desktop app and a standalone `octoterm-server` running on the same machine share this file, so signing in (or out) from either one is reflected in both.
-
-```bash
-octoterm-server cloud register        # sign up and sign in (email code)
-octoterm-server cloud login
-octoterm-server cloud status
-octoterm-server cloud logout
-octoterm-server cloud reset-password
-octoterm-server cloud delete-account  # permanently delete the account and all its data
-```
-
-Set a default Cloud address in `config.toml`:
-
-```toml
-[cloud]
-url = "https://cloud.example.com"
-```
-
-Desktop users select a relay region in the "Cloud account" section of Settings and click
-"Sign in through browser". Sign-in, registration and password recovery happen in the browser;
-Desktop receives a loopback callback and saves the sign-in state automatically.
-
-| Relay region | Address |
-|---|---|
-| Mainland China (default) | `https://octoterm.signal.top/` |
-| North America (not deployed yet) | `https://octoterm.eclosion.ai/` |
-| Other global regions (not deployed yet) | `https://global.octoterm.eclosion.ai/` |
-
-Cloud must run a version with `/auth/desktop` and `/v1/auth/desktop/*` support.
-Android uses the same three relay presets and a browser sign-in flow, with registration
-and password recovery on the web page. The browser returns to the app, which saves a
-device credential and registers for push notifications. Android requires the Cloud
-`/auth/mobile` and `/v1/auth/mobile/*` endpoints. The account icon turns the theme's
-accent color with a small check when signed in, and shows a small cross when signed out.
-The account page reports push registration status and offers a retry. Cloud selects
-Aliyun or FCM through its deployment configuration; Android reads `/v1/push-config`
-and registers with that provider. Put the downloaded Aliyun client configuration at
-`clients/android/app/aliyun-emas-services.json` (ignored by Git). Its app credentials
-are separate from the server-only Alibaba Cloud AccessKey. Aliyun does not require
-Google Play services; FCM requires Google Play services and network access to Google.
-Both routes require notification permission. Aliyun's proprietary channel requires
-the app process to be runnable; vendor channels need additional SDKs and credentials
-for timely delivery when the process has been killed.
-Updated Desktop/server builds also send a notification when a Stop hook completes a turn.
-Sign-in can be cancelled and expires after 10 minutes. The callback listens only on
-`127.0.0.1` using a temporary port.
+Sign in to Octoterm Cloud on your server and Android client to receive agent questions, permission requests, and completion notifications on your phone.
 
 ## Architecture
 
