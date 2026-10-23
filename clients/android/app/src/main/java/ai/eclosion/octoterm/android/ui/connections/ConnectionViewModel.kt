@@ -131,6 +131,11 @@ data class ChatUiState(
     val messages: List<ChatMessage> = emptyList(),
     val notice: ChatNotice? = null,
     val loading: Boolean = false,
+    val olderCursor: String? = null,
+    val olderLoading: Boolean = false,
+    val olderFailed: Boolean = false,
+    val historySupported: Boolean = false,
+    val historyPage: Int = 0,
 )
 
 data class ConnectionUiState(
@@ -233,6 +238,7 @@ interface ConnectionActions {
     fun attachedSession(): SessionInfo?
     fun openTabs(): List<SessionInfo>
     fun toggleChat()
+    fun loadOlderChat()
     fun connection(id: String): ServerConnection?
     fun reconnect(id: String)
     fun disconnectServer(id: String)
@@ -282,6 +288,8 @@ class ConnectionController(
     /** 点通知要去的会话;连上并拿到会话列表后消费,连接失败/断开即作废。 */
     private val pendingOpen = PendingOpenTracker()
     private var chatJob: Job? = null
+    private var olderChatJob: Job? = null
+    private var chatTimeline = 0L
     private var chatAgain = false
     private var chatCursor: String? = null
     /** 当前消息属于哪个 agent 会话。换了 agent 就得整段重拉,旧游标对新记录没有意义 */
@@ -648,6 +656,8 @@ class ConnectionController(
         } else {
             suspendViewports()
             chatJob?.cancel(); chatJob = null
+            olderChatJob?.cancel(); olderChatJob = null
+            _state.update { it.copy(chat = it.chat.copy(olderLoading = false)) }
             if (!_state.value.keepConnectionsInBackground) {
                 val desired = connectionPreferences.desiredConnections
                 links.disconnectAll()
@@ -1134,6 +1144,9 @@ class ConnectionController(
     }
 
     private fun resetChat() {
+        chatTimeline++
+        olderChatJob?.cancel()
+        olderChatJob = null
         chatJob?.cancel()
         chatJob = null
         chatAgain = false
@@ -1186,6 +1199,10 @@ class ConnectionController(
                     }
                     is ChatWindow.Transcript -> {
                         val advanced = !inc || win.cursor != chatCursor
+                        if (win.reset || !inc) {
+                            chatTimeline++
+                            olderChatJob?.cancel(); olderChatJob = null
+                        }
                         chatCursor = win.cursor
                         chatAgentKey = agent.key
                         _state.update {
@@ -1194,6 +1211,10 @@ class ConnectionController(
                                     messages = Chat.merge(if (inc) it.chat.messages else emptyList(), win),
                                     notice = null,
                                     loading = false,
+                                    olderCursor = if (win.reset || !inc) win.olderCursor else it.chat.olderCursor,
+                                    historySupported = if (win.reset || !inc) win.historySupported else it.chat.historySupported,
+                                    olderLoading = if (win.reset || !inc) false else it.chat.olderLoading,
+                                    olderFailed = if (win.reset || !inc) false else it.chat.olderFailed,
                                 ),
                             )
                         }
@@ -1202,6 +1223,41 @@ class ConnectionController(
                 }
                 inc = true
             } while (chatAgain)
+        }
+    }
+
+    override fun loadOlderChat() {
+        val st = _state.value
+        val sessionId = st.chat.sessionId ?: return
+        val before = st.chat.olderCursor ?: return
+        val agent = AgentSessions.chatAgentFor(st.agents, sessionId) ?: return
+        val origin = httpOrigin ?: return
+        val token = httpToken ?: return
+        if (!st.chatOpen || st.chat.olderLoading || olderChatJob?.isActive == true) return
+        val timeline = chatTimeline
+        _state.update { it.copy(chat = it.chat.copy(olderLoading = true, olderFailed = false)) }
+        olderChatJob = controllerScope.launch {
+            val win = withContext(Dispatchers.IO) {
+                Chat.fetch(http, origin, token, agent.agentId, agent.agentSessionId, null, before)
+            }
+            val current = _state.value
+            if (timeline != chatTimeline || !current.chatOpen || current.chat.sessionId != sessionId ||
+                current.chat.olderCursor != before || AgentSessions.chatAgentFor(current.agents, sessionId)?.key != agent.key) return@launch
+            if (win !is ChatWindow.Transcript || (!win.reset && win.olderCursor == before)) {
+                _state.update { it.copy(chat = it.chat.copy(olderLoading = false, olderFailed = true)) }
+                return@launch
+            }
+            if (win.reset) {
+                chatJob?.cancel(); chatJob = null; chatAgain = false
+                chatTimeline++
+                chatCursor = win.cursor
+                chatAgentKey = agent.key
+            }
+            _state.update { it.copy(chat = it.chat.copy(
+                messages = Chat.merge(it.chat.messages, win, prepend = true),
+                olderCursor = win.olderCursor, historySupported = win.historySupported,
+                olderLoading = false, olderFailed = false, historyPage = it.chat.historyPage + 1,
+            )) }
         }
     }
 

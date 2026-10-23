@@ -51,6 +51,8 @@ sealed class ChatWindow {
         val cursor: String,
         val reset: Boolean,
         val more: Boolean,
+        val olderCursor: String? = null,
+        val historySupported: Boolean = false,
     ) : ChatWindow()
 
     data class Terminal(val reason: ChatFallback) : ChatWindow()
@@ -79,6 +81,8 @@ object Chat {
             cursor = root.optString("cursor"),
             reset = root.optBoolean("reset"),
             more = root.optBoolean("more"),
+            olderCursor = root.optString("older_cursor").takeUnless { it.isEmpty() || it == "null" },
+            historySupported = root.has("older_cursor"),
         )
     }
 
@@ -117,11 +121,12 @@ object Chat {
      * 同一批里也去重:拿不到 agent 自己的 id 时服务端按内容合成,两条一模一样的消息会撞 id,
      * 而列表按 id 作 key,重复的 key 会让界面直接崩掉。
      */
-    fun merge(prev: List<ChatMessage>, win: ChatWindow): List<ChatMessage> {
+    fun merge(prev: List<ChatMessage>, win: ChatWindow, prepend: Boolean = false): List<ChatMessage> {
         if (win !is ChatWindow.Transcript) return prev
         val base = if (win.reset) emptyList() else prev
         val seen = base.mapTo(HashSet()) { it.id }
-        return base + win.messages.filter { seen.add(it.id) }
+        val incoming = win.messages.filter { seen.add(it.id) }
+        return if (prepend) incoming + base else base + incoming
     }
 
     /** 老版本服务端没有这个路由:降级成「读不到」,不是报错(协议 T12)。 */
@@ -132,6 +137,7 @@ object Chat {
         agentId: String,
         agentSessionId: String,
         after: String?,
+        before: String? = null,
     ): ChatWindow {
         val unreadable = ChatWindow.Terminal(ChatFallback.Unreadable)
         return try {
@@ -140,6 +146,7 @@ object Chat {
                 ?.addQueryParameter("agent_id", agentId)
                 ?.addQueryParameter("agent_session_id", agentSessionId)
                 ?.apply { if (after != null) addQueryParameter("after", after) }
+                ?.apply { if (before != null) addQueryParameter("before", before) }
                 ?.build()
                 ?: return unreadable
             val request = Request.Builder().url(url).header("Authorization", "Bearer $token").build()

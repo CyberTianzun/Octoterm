@@ -32,6 +32,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -76,6 +77,7 @@ fun ChatView(
     chat: ChatUiState,
     onOpenTerminal: () -> Unit,
     modifier: Modifier = Modifier,
+    onLoadOlder: () -> Unit = {},
 ) {
     val notice = chat.notice
     when {
@@ -85,17 +87,21 @@ fun ChatView(
             Spacer(Modifier.height(12.dp))
             Text(stringResource(R.string.chat_loading), style = MaterialTheme.typography.bodyMedium)
         }
-        chat.messages.isEmpty() -> Centered(modifier) {
+        chat.messages.isEmpty() && chat.olderCursor == null -> Centered(modifier) {
             Text(stringResource(R.string.chat_empty), style = MaterialTheme.typography.bodyMedium)
         }
-        else -> key(chat.sessionId) { Messages(chat.messages, modifier) }
+        else -> key(chat.sessionId) { Messages(chat, onLoadOlder, modifier) }
     }
 }
 
 @Composable
-private fun Messages(messages: List<ChatMessage>, modifier: Modifier) {
+private fun Messages(chat: ChatUiState, onLoadOlder: () -> Unit, modifier: Modifier) {
+    val messages = chat.messages
     // The trailing item anchors the viewport below even a very tall final message.
-    val listState = rememberLazyListState(initialFirstVisibleItemIndex = messages.size)
+    val listState = rememberLazyListState(initialFirstVisibleItemIndex = messages.size + 1)
+    var historyPage by remember { mutableStateOf(chat.historyPage) }
+    var historyAnchor by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    val olderLoading by rememberUpdatedState(chat.olderLoading)
     // 贴着底部时才自动跟随;用户往上翻看历史时不该被拽回来。只在**用户滚动**时更新,
     // 否则新消息一来「不在底部了」会先于跟随生效,把自己关掉。
     var follow by remember { mutableStateOf(true) }
@@ -106,22 +112,60 @@ private fun Messages(messages: List<ChatMessage>, modifier: Modifier) {
                 if (scrolling && !automatic) follow = !canScrollForward
             }
     }
-    LaunchedEffect(messages) {
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            if (olderLoading && listState.isScrollInProgress && !scrollingToBottom)
+                listState.layoutInfo.visibleItemsInfo.firstOrNull { (it.key as? String)?.startsWith("message:") == true }
+                    ?.let { it.key as String to it.offset }
+            else null
+        }.collect { anchor -> if (anchor != null) historyAnchor = anchor }
+    }
+    LaunchedEffect(messages, chat.historyPage) {
+        if (historyPage != chat.historyPage) {
+            historyPage = chat.historyPage
+            val anchor = historyAnchor
+            historyAnchor = null
+            val index = anchor?.let { saved -> messages.indexOfFirst { "message:${it.id}" == saved.first } } ?: -1
+            if (anchor != null && index >= 0) {
+                scrollingToBottom = true
+                try { listState.scrollToItem(index + 1, -anchor.second) }
+                finally { scrollingToBottom = false }
+            }
+            return@LaunchedEffect
+        }
         if (follow) {
             scrollingToBottom = true
-            try { listState.scrollToItem(messages.size) }
+            try { listState.scrollToItem(messages.size + 1) }
             finally { scrollingToBottom = false }
         }
     }
     val scrollbarColor = MaterialTheme.colorScheme.onSurfaceVariant
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxSize().chatScrollbar(listState, messages.size, scrollbarColor),
+        modifier = modifier.fillMaxSize().chatScrollbar(listState, messages.size + 1, scrollbarColor),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(messages, key = { it.id }) { MessageRow(it) }
-        item { Spacer(Modifier.height(1.dp)) }
+        item(key = "history-control") {
+            if (chat.historySupported) Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                if (chat.olderCursor != null) OutlinedButton(onClick = {
+                    follow = false
+                    historyAnchor = listState.layoutInfo.visibleItemsInfo
+                        .firstOrNull { (it.key as? String)?.startsWith("message:") == true }
+                        ?.let { it.key as String to it.offset }
+                    onLoadOlder()
+                }, enabled = !chat.olderLoading) {
+                    Text(stringResource(when {
+                        chat.olderLoading -> R.string.chat_loading_older
+                        chat.olderFailed -> R.string.chat_older_failed
+                        else -> R.string.chat_load_older
+                    }))
+                } else Text(stringResource(R.string.chat_beginning), style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 8.dp))
+            }
+        }
+        items(messages, key = { "message:${it.id}" }) { MessageRow(it) }
+        item(key = "conversation-end") { Spacer(Modifier.height(1.dp)) }
     }
 }
 

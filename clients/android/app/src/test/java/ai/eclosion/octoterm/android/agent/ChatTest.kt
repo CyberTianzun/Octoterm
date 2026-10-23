@@ -9,6 +9,28 @@ class ChatTest {
         ChatMessage(id, ChatRole.Assistant, null, listOf(ChatBlock.Text(text)))
 
     @Test
+    fun olderPageMetadataIsOptionalForOlderServers() {
+        val old = Chat.parseWindow("""{"source":"transcript","messages":[],"cursor":"c","reset":true,"more":false}""") as ChatWindow.Transcript
+        assertEquals(false, old.historySupported)
+        assertEquals(null, old.olderCursor)
+        val page = Chat.parseWindow("""{"source":"transcript","messages":[],"older_cursor":"opaque"}""") as ChatWindow.Transcript
+        assertEquals(true, page.historySupported)
+        assertEquals("opaque", page.olderCursor)
+        val beginning = Chat.parseWindow("""{"source":"transcript","messages":[],"older_cursor":null}""") as ChatWindow.Transcript
+        assertEquals(true, beginning.historySupported)
+        assertEquals(null, beginning.olderCursor)
+    }
+
+    @Test
+    fun earlierMessagesPrependAndKeepTheExistingLiveVersionAtOverlaps() {
+        val win = ChatWindow.Transcript(listOf(msg("a"), msg("b"), msg("c"), msg("b")), "forward-unused", false, false)
+        val result = Chat.merge(listOf(msg("c", "latest c"), msg("d")), win, prepend = true)
+        assertEquals(listOf("a", "b", "c", "d"), result.map { it.id })
+        assertEquals(listOf(ChatBlock.Text("latest c")), result[2].blocks)
+        assertEquals(listOf("a", "b", "c"), Chat.merge(listOf(msg("old")), win.copy(reset = true), prepend = true).map { it.id })
+    }
+
+    @Test
     fun parsesAllBlockKindsAndSkipsUnknownOnes() {
         val win = Chat.parseWindow(
             """{"source":"transcript","cursor":"c1","reset":false,"more":true,"messages":[

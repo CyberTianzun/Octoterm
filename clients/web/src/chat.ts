@@ -33,7 +33,7 @@ export type FallbackReason =
   | "parse-failed";
 
 export type ChatWindow =
-  | { source: "transcript"; messages: Message[]; cursor: string; reset: boolean; more: boolean }
+  | { source: "transcript"; messages: Message[]; cursor: string; reset: boolean; more: boolean; older_cursor?: string | null }
   | { source: "terminal"; reason: FallbackReason };
 
 const FALLBACK_KEY: Record<FallbackReason, MsgKey> = {
@@ -63,9 +63,11 @@ export async function fetchMessages(
   agentId: string,
   agentSessionId: string,
   after?: string,
+  before?: string,
 ): Promise<ChatWindow> {
   const q = new URLSearchParams({ agent_id: agentId, agent_session_id: agentSessionId });
   if (after) q.set("after", after);
+  if (before) q.set("before", before);
   try {
     const r = await fetch(`/api/agents/messages?${q}`, {
       headers: { Authorization: `Bearer ${token}` },
@@ -87,11 +89,12 @@ export async function fetchMessages(
  *
  * 追加时按 id 去重:窗口边界上的那条可能被重复送来。
  */
-export function mergeWindow(prev: Message[], win: ChatWindow): Message[] {
+export function mergeWindow(prev: Message[], win: ChatWindow, prepend = false): Message[] {
   if (win.source !== "transcript") return prev;
-  if (win.reset) return win.messages;
-  const seen = new Set(prev.map((m) => m.id));
-  return prev.concat(win.messages.filter((m) => !seen.has(m.id)));
+  const base = win.reset ? [] : prev;
+  const seen = new Set(base.map((m) => m.id));
+  const incoming = win.messages.filter((m) => { if (seen.has(m.id)) return false; seen.add(m.id); return true; });
+  return prepend ? incoming.concat(base) : base.concat(incoming);
 }
 
 /** 一条消息的纯文本预览,给折叠态和无障碍用。 */

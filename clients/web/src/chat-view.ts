@@ -51,11 +51,18 @@ function blockNode(block: Block): HTMLElement {
 }
 
 /** Preserve disclosure state and the reading position across transcript updates. */
-export function renderMessages(box: HTMLElement, messages: Message[], scope: string, scrollContainer: HTMLElement = box): void {
+export function renderMessages(box: HTMLElement, messages: Message[], scope: string, scrollContainer: HTMLElement = box,
+  options: { prepend?: boolean; header?: HTMLElement } = {}): void {
   const sameScope = box.dataset.chatScope === scope;
   const scrollTop = sameScope ? scrollContainer.scrollTop : 0;
   // Measure before replacing children: an empty container always looks like its bottom.
   const atBottom = !sameScope || scrollContainer.scrollHeight - scrollContainer.scrollTop - scrollContainer.clientHeight < 40;
+  const anchor = sameScope && options.prepend
+    ? Array.from(box.querySelectorAll<HTMLElement>("[data-message-id]")).find((row) =>
+      row.getBoundingClientRect().bottom >= scrollContainer.getBoundingClientRect().top)
+    : undefined;
+  const anchorTop = anchor?.getBoundingClientRect().top;
+  const anchorId = anchor?.dataset.messageId;
   const expanded = new Set<string>();
   let focused: string | undefined;
   if (sameScope) {
@@ -66,10 +73,12 @@ export function renderMessages(box: HTMLElement, messages: Message[], scope: str
   }
 
   const content = document.createDocumentFragment();
+  if (options.header) content.appendChild(options.header);
   let focusTarget: HTMLElement | null = null;
   for (const message of messages) {
     const row = document.createElement("div");
     row.className = `cmsg c-${message.role}`;
+    row.dataset.messageId = message.id;
     message.blocks.forEach((block, index) => {
       const node = blockNode(block);
       if (node instanceof HTMLDetailsElement) {
@@ -85,5 +94,10 @@ export function renderMessages(box: HTMLElement, messages: Message[], scope: str
   box.replaceChildren(content);
   box.dataset.chatScope = scope;
   if (focusTarget) (focusTarget as HTMLElement).focus({ preventScroll: true });
-  scrollContainer.scrollTop = atBottom ? scrollContainer.scrollHeight : scrollTop;
+  const restored = anchorId === undefined ? undefined : Array.from(box.querySelectorAll<HTMLElement>("[data-message-id]"))
+    .find((row) => row.dataset.messageId === anchorId);
+  if (options.prepend && sameScope) {
+    scrollContainer.scrollTop = scrollTop;
+    if (restored && anchorTop !== undefined) scrollContainer.scrollTop += restored.getBoundingClientRect().top - anchorTop;
+  } else scrollContainer.scrollTop = atBottom ? scrollContainer.scrollHeight : scrollTop;
 }

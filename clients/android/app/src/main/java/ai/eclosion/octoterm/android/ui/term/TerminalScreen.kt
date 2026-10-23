@@ -88,6 +88,7 @@ fun TerminalScreen(
     chatOpen: Boolean,
     chatAvailable: Boolean,
     onToggleChat: () -> Unit,
+    onLoadOlderChat: () -> Unit,
 ) {
     var ctrl by remember(activeId) { mutableStateOf(false) }
     var alt by remember(activeId) { mutableStateOf(false) }
@@ -225,6 +226,7 @@ fun TerminalScreen(
                 ChatView(
                     chat = chat,
                     onOpenTerminal = onToggleChat,
+                    onLoadOlder = onLoadOlderChat,
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)

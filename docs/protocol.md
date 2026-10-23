@@ -624,7 +624,7 @@ Every item MUST be answered in the proposal.
   **client-neutral** shape — the client never sees an agent's own message schema
   (R13). Two rules matter more than the shape:
   - **Failure is typed, never an empty list.** The reply is either
-    `{ source:"transcript", messages, cursor, reset, more }` or
+    `{ source:"transcript", messages, cursor, reset, more, older_cursor }` or
     `{ source:"terminal", reason }` with `reason` one of `disabled`,
     `no-transcript-path`, `unsupported-agent`, `unreadable`, `parse-failed`. A
     client MUST render the reason and offer the terminal view; an empty chat is
@@ -637,6 +637,13 @@ Every item MUST be answered in the proposal.
   immediately fetch again with the new cursor. Bulk conversation text never
   travels on the control channel (R4) — that is why this is a `/api/` route and
   `agent-event` only says "something changed".
+  `older_cursor` is an optional opaque backward cursor: pass it unchanged as
+  `before` to load one earlier page, and prepend that page without changing the
+  live forward `cursor`. A null value means the beginning has been reached;
+  absence means the server does not advertise backward paging. `before` and
+  `after` are mutually exclusive. A backward response with `reset: true` replaces
+  the timeline and both cursors. Clients must preserve the visible message when
+  prepending, offer retry on failure, and stop at an unchanged backward cursor.
 - **A8** The server↔agent side of this feature (how hooks are installed into a
   third-party agent's configuration, and the `/hook/...` ingress they call) is
   **not part of this document**: it is not on the wire between a client and

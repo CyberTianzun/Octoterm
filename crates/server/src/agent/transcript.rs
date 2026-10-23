@@ -166,6 +166,8 @@ pub struct Window {
     pub cursor: String,
     pub reset: bool,
     pub more: bool,
+    /// Separate backward cursor; forward increments must not replace it on clients.
+    pub older_cursor: Option<String>,
 }
 
 /// 游标对客户端**不透明**:它只负责原样带回来。做成不透明是为了以后能换实现
@@ -197,6 +199,7 @@ pub fn read_window(
             cursor: encode_cursor(plan.start, file_len),
             reset: false,
             more: false,
+            older_cursor: None,
         });
     }
 
@@ -239,25 +242,130 @@ pub fn read_window(
         }
     }
 
-    let body = &buf[..body_len];
+    let mut body = &buf[..body_len];
+    let mut skipped = 0;
+    if plan.reset && plan.start > 0 {
+        f.seek(SeekFrom::Start(plan.start - 1))?;
+        let mut previous = [0];
+        f.read_exact(&mut previous)?;
+        if previous[0] != b'\n' {
+            skipped = body.iter().position(|b| *b == b'\n').map_or(body.len(), |i| i + 1);
+            body = &body[skipped..];
+        }
+    }
     // 记录里可能混进非法字节(截断的多字节字符),不能让它把整次读取变成错误
     let text = String::from_utf8_lossy(body);
     // body 的第一个字节在文件里的绝对位置 —— 解析器用它给每一行算稳定 id
-    let base = plan.start + consumed - body_len as u64;
+    let base = plan.start + consumed - body_len as u64 + skipped as u64;
     let mut messages = parse(&text, base);
+    let original_count = messages.len();
 
     // 上界**只作用于首次加载**:那时保留最近的即可。增量不能丢头(会静默丢消息),
     // 它靠 INCREMENT_BYTES + `more` 来限量。
     if plan.reset {
         messages = clamp_for_reset(messages);
     }
+    let older_cursor = if plan.reset {
+        older_cursor(body, if body.is_empty() { plan.start } else { base }, file_len,
+            original_count - messages.len())
+    } else { None };
 
     Ok(Window {
         messages,
         cursor: encode_cursor(plan.start + consumed, file_len),
         reset: plan.reset,
         more: plan.more,
+        older_cursor,
     })
+}
+
+/// A page can stop within a parsed range because one JSONL row may yield several
+/// messages. Keep the remaining message count as well as byte offsets, so neither
+/// the message cap nor the response-byte cap silently loses older messages.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct OlderCursor {
+    start: u64,
+    end: u64,
+    seen_len: u64,
+    remaining: usize,
+    hash: u64,
+}
+
+fn range_hash(bytes: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    bytes.hash(&mut hash);
+    hash.finish()
+}
+
+fn older_cursor(body: &[u8], start: u64, seen_len: u64, remaining: usize) -> Option<String> {
+    use base64::Engine;
+    if start == 0 && remaining == 0 { return None; }
+    let cursor = OlderCursor { start, end: start + body.len() as u64, seen_len, remaining, hash: range_hash(body) };
+    Some(base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(serde_json::to_vec(&cursor).ok()?))
+}
+
+/// Load one bounded page preceding the oldest displayed message. A truncated or
+/// rewritten range invalidates the timeline and returns a fresh reset window.
+pub fn read_older_window(
+    path: &std::path::Path,
+    before: &str,
+    parse: &dyn Fn(&str, u64) -> Vec<Message>,
+) -> std::io::Result<Window> {
+    use base64::Engine;
+    use std::io::{Read, Seek, SeekFrom};
+    let file_len = std::fs::metadata(path)?.len();
+    let decoded = if before.len() <= 2048 {
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(before).ok()
+            .and_then(|b| serde_json::from_slice::<OlderCursor>(&b).ok())
+    } else { None };
+    let Some(cursor) = decoded.filter(|c| c.start <= c.end && c.end <= c.seen_len &&
+        c.seen_len <= file_len && c.end - c.start <= WINDOW_BYTES) else {
+        return read_window(path, None, parse);
+    };
+    let mut file = std::fs::File::open(path)?;
+    if cursor.remaining == 0 && cursor.end > cursor.start {
+        // Even after consuming this range, it anchors the displayed timeline.
+        // Validate it before crossing into an older range after a rewrite.
+        file.seek(SeekFrom::Start(cursor.start))?;
+        let mut anchor = vec![0; (cursor.end - cursor.start) as usize];
+        file.read_exact(&mut anchor)?;
+        if range_hash(&anchor) != cursor.hash { return read_window(path, None, parse); }
+    }
+    let (start, end) = if cursor.remaining > 0 {
+        (cursor.start, cursor.end)
+    } else {
+        (cursor.start.saturating_sub(WINDOW_BYTES), cursor.start)
+    };
+    file.seek(SeekFrom::Start(start))?;
+    let mut bytes = vec![0; (end - start) as usize];
+    file.read_exact(&mut bytes)?;
+    let mut base = start;
+    let mut body = bytes.as_slice();
+    if cursor.remaining > 0 {
+        if range_hash(body) != cursor.hash { return read_window(path, None, parse); }
+    } else {
+        if start > 0 {
+            file.seek(SeekFrom::Start(start - 1))?;
+            let mut previous = [0]; file.read_exact(&mut previous)?;
+            if previous[0] != b'\n' {
+                let skip = body.iter().position(|b| *b == b'\n').map_or(body.len(), |i| i + 1);
+                base += skip as u64; body = &body[skip..];
+            }
+        }
+        let complete = body.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1);
+        body = &body[..complete];
+    }
+    let mut messages = parse(&String::from_utf8_lossy(body), base);
+    if cursor.remaining > 0 {
+        if cursor.remaining > messages.len() { return read_window(path, None, parse); }
+        messages.truncate(cursor.remaining);
+    }
+    let count = messages.len();
+    let messages = clamp_for_reset(messages);
+    let older_cursor = older_cursor(body, if body.is_empty() { start } else { base },
+        cursor.seen_len, count - messages.len());
+    Ok(Window { messages, cursor: encode_cursor(end, file_len), reset: false, more: false, older_cursor })
 }
 
 /// 拿不到 agent 自己的 id 时,用**这一行在文件里的字节偏移**当 id。

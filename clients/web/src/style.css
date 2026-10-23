@@ -640,6 +640,13 @@ body[data-sidebar-position="hidden"] #menu { display: none; }
 .cb-result-tag { font-size: 11px; color: #ff6b6b; margin-right: 6px; }
 
 /* 回落:说清原因 + 给一条出路,绝不画一个空聊天框 */
+.chat-history {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0 16px;
+  color: var(--dim);
+  font-size: 12px;
+}
 .chat-fallback {
   display: flex;
   flex-direction: column;

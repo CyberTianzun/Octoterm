@@ -475,6 +475,8 @@ pub struct MessagesQuery {
     /// 上次的游标,不透明串,原样带回来。缺省 = 首次加载,取最近的一窗。
     #[serde(default)]
     pub after: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
 }
 
 /// 回落的原因。**必须是带类型的**,不能只回一个空列表。
@@ -497,6 +499,9 @@ pub async fn messages(
 ) -> Response {
     if !bearer_ok(&headers, &state.token) {
         return (StatusCode::UNAUTHORIZED, "unauthorized").into_response();
+    }
+    if q.after.is_some() && q.before.is_some() {
+        return (StatusCode::BAD_REQUEST, "use either after or before").into_response();
     }
     // 门控排在**一切之前**:关着的时候一个字节都不该读
     if !state.agents.transcript_enabled {
@@ -537,12 +542,14 @@ pub async fn messages(
 
     // 读文件是阻塞 IO
     let after = q.after.clone();
+    let before = q.before.clone();
     let job = tokio::task::spawn_blocking(move || {
-        crate::agent::transcript::read_window(
-            std::path::Path::new(&path),
-            after.as_deref(),
-            &|text, base| adapter.parse_transcript(text, base),
-        )
+        let parse = |text: &str, base| adapter.parse_transcript(text, base);
+        if let Some(before) = before {
+            crate::agent::transcript::read_older_window(std::path::Path::new(&path), &before, &parse)
+        } else {
+            crate::agent::transcript::read_window(std::path::Path::new(&path), after.as_deref(), &parse)
+        }
     });
     match job.await {
         Ok(Ok(window)) => {

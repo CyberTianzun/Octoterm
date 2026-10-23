@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Octoterm</string>
+    <string name="chat_load_older">Load earlier messages</string>
+    <string name="chat_loading_older">Loading earlier messages…</string>
+    <string name="chat_older_failed">Could not load messages. Retry</string>
+    <string name="chat_beginning">Beginning of conversation</string>
 
     <string name="servers_title">Servers</string>
     <string name="connection_connected">Connected</string>

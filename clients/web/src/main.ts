@@ -85,6 +85,29 @@ const BASE_TITLE = document.title;
 let viewMode: "terminal" | "chat" = "terminal";
 let chatMessages: ChatMessage[] = [];
 let chatCursor: string | null = null;
+let chatOlderCursor: string | null = null;
+let chatOlderLoading = false;
+let chatOlderFailed = false;
+let chatHistorySupported = false;
+let chatScope: string | null = null;
+let chatEpoch = 0;
+let chatTimeline = 0;
+let chatBusy = false;
+let chatAgain = false;
+
+function resetChatPages() {
+  chatEpoch++;
+  chatTimeline++;
+  chatMessages = [];
+  chatCursor = null;
+  chatOlderCursor = null;
+  chatOlderLoading = false;
+  chatOlderFailed = false;
+  chatHistorySupported = false;
+  chatScope = null;
+  chatBusy = false;
+  chatAgain = false;
+}
 /** 读不到对话记录时的原因(已经翻成人话)。有值就说明这次该显示回落。 */
 let chatFallback: string | null = null;
 
@@ -327,8 +350,7 @@ function openTerminal(id: number) {
   }
   attachedId = id;
   // 换了会话,上一份对话记录与这一份无关
-  chatMessages = [];
-  chatCursor = null;
+  resetChatPages();
   chatFallback = null;
   viewMode = "terminal";
   term = new Terminal({ allowProposedApi: true, ...toTerminalOptions(config) });
@@ -437,8 +459,7 @@ function closeTerminal() {
   attachedId = null;
   disposeTerminal();
   viewMode = "terminal";
-  chatMessages = [];
-  chatCursor = null;
+  resetChatPages();
   chatFallback = null;
   renderSessionList();
   showView();
@@ -591,45 +612,80 @@ function showView() {
  * 服务端说 `more` 就立刻再拉一次 —— 那表示这次是被字节上限截断的,不是没有了。
  */
 async function refreshChat(incremental: boolean) {
-  if (!chatAvailable(agents, attachedId, transcriptEnabled)) {
-    showView();
-    return;
-  }
+  if (!chatAvailable(agents, attachedId, transcriptEnabled)) { showView(); return; }
   const agent = attachedAgent();
-  if (!agent) {
-    // 这个会话里没有认出任何 agent。说清楚,并给一条出路 —— 沉默会让人以为是坏了。
-    chatFallback = t("chat.fallback.noAgent");
-    renderChat();
-    return;
-  }
+  if (!agent) { chatFallback = t("chat.fallback.noAgent"); renderChat(); return; }
   const sessionId = attachedId;
-  const win: ChatWindow = await fetchMessages(
-    token(),
-    agent.agent_id,
-    agent.agent_session_id,
-    incremental ? (chatCursor ?? undefined) : undefined,
-  );
-  const currentAgent = attachedAgent();
-  if (attachedId !== sessionId || !chatAvailable(agents, attachedId, transcriptEnabled) ||
-      !currentAgent || keyOf(currentAgent) !== keyOf(agent)) return;
-  if (win.source !== "transcript") {
-    chatFallback = fallbackText(win.reason, agent.agent_id);
-    renderChat();
-    return;
-  }
-  chatFallback = null;
-  chatMessages = mergeWindow(incremental ? chatMessages : [], win);
-  const advanced = win.cursor !== chatCursor;
-  chatCursor = win.cursor;
-  renderChat();
-  // **前进保证**。`more` 说「还有」,但只有游标真的动了才说明这一轮读到了东西;
-  // 游标原地不动还继续拉,就是一个打满主线程、界面彻底失去响应的死循环 ——
-  // 这不是假想,是复现过的。服务端那边也补了前进保证,但客户端不该把「不会卡死」
-  // 寄托在服务端不出错上。
-  if (win.more && advanced) void refreshChat(true);
+  const scope = JSON.stringify([sessionId, keyOf(agent)]);
+  if (chatScope !== scope) { resetChatPages(); chatScope = scope; incremental = false; }
+  if (chatBusy) { chatAgain = true; return; }
+  const epoch = chatEpoch;
+  chatBusy = true;
+  try {
+    do {
+      chatAgain = false;
+      const win = await fetchMessages(token(), agent.agent_id, agent.agent_session_id,
+        incremental ? (chatCursor ?? undefined) : undefined);
+      const currentAgent = attachedAgent();
+      if (epoch !== chatEpoch || attachedId !== sessionId || !currentAgent ||
+          keyOf(currentAgent) !== keyOf(agent) || !chatAvailable(agents, attachedId, transcriptEnabled)) return;
+      if (win.source !== "transcript") {
+        chatFallback = fallbackText(win.reason, agent.agent_id); renderChat(); return;
+      }
+      chatFallback = null;
+      if (win.reset || !incremental) {
+        chatTimeline++;
+        chatOlderCursor = win.older_cursor ?? null;
+        chatHistorySupported = win.older_cursor !== undefined;
+        chatOlderLoading = false;
+        chatOlderFailed = false;
+      }
+      chatMessages = mergeWindow(incremental ? chatMessages : [], win);
+      const advanced = win.cursor !== chatCursor;
+      chatCursor = win.cursor;
+      renderChat();
+      if (win.more && advanced) chatAgain = true;
+      incremental = true;
+    } while (chatAgain);
+  } finally { if (epoch === chatEpoch) chatBusy = false; }
 }
 
-function renderChat() {
+async function loadOlderChat() {
+  const agent = attachedAgent();
+  const before = chatOlderCursor;
+  if (!agent || !before || chatOlderLoading || viewMode !== "chat") return;
+  const epoch = chatEpoch;
+  const timeline = chatTimeline;
+  const scope = chatScope;
+  chatOlderLoading = true;
+  chatOlderFailed = false;
+  renderChat(true);
+  try {
+    const win = await fetchMessages(token(), agent.agent_id, agent.agent_session_id, undefined, before);
+    if (epoch !== chatEpoch || timeline !== chatTimeline || scope !== chatScope || chatOlderCursor !== before) return;
+    if (win.source !== "transcript") { chatOlderFailed = true; return; }
+    if (win.reset) {
+      resetChatPages();
+      chatScope = scope;
+      chatMessages = mergeWindow([], win);
+      chatCursor = win.cursor;
+      chatOlderCursor = win.older_cursor ?? null;
+      chatHistorySupported = win.older_cursor !== undefined;
+      renderChat();
+      return;
+    }
+    if (win.older_cursor === before) { chatOlderFailed = true; return; }
+    chatMessages = mergeWindow(chatMessages, win, true);
+    chatOlderCursor = win.older_cursor ?? null;
+  } finally {
+    if (epoch === chatEpoch && timeline === chatTimeline) {
+      chatOlderLoading = false;
+      renderChat(true);
+    }
+  }
+}
+
+function renderChat(prepend = false) {
   const box = $("chat-view");
   if (chatFallback) {
     const wrap = document.createElement("div");
@@ -638,19 +694,29 @@ function renderChat() {
     why.textContent = chatFallback;
     const go = document.createElement("button");
     go.textContent = t("chat.openTerminalInstead");
-    go.addEventListener("click", () => {
-      viewMode = "terminal";
-      showView();
-    });
+    go.addEventListener("click", () => { viewMode = "terminal"; showView(); });
     wrap.append(why, go);
     box.replaceChildren(wrap);
     return;
   }
-  if (chatMessages.length === 0) {
+  let header: HTMLElement | undefined;
+  if (chatHistorySupported) {
+    header = document.createElement("div");
+    header.className = "chat-history";
+    if (chatOlderCursor) {
+      const load = document.createElement("button");
+      load.type = "button";
+      load.disabled = chatOlderLoading;
+      load.textContent = t(chatOlderLoading ? "chat.loadingOlder" : chatOlderFailed ? "chat.olderFailed" : "chat.loadOlder");
+      load.addEventListener("click", () => { void loadOlderChat(); });
+      header.appendChild(load);
+    } else header.textContent = t("chat.beginning");
+  }
+  if (chatMessages.length === 0 && !chatOlderCursor) {
     box.innerHTML = `<div class="empty">${t("chat.empty")}</div>`;
     return;
   }
-  renderMessages(box, chatMessages, JSON.stringify([attachedId, keyOf(attachedAgent()!)]));
+  renderMessages(box, chatMessages, JSON.stringify([chatScope, chatEpoch]), box, { prepend, header });
 }
 
 /** 状态胶囊。列表页和侧边栏共用同一个,保证两处看到的是一回事。 */

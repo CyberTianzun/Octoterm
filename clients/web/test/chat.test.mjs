@@ -19,6 +19,25 @@ test("追加时按 id 去重 —— 窗口边界上那条可能被重复送来",
   assert.deepEqual(out.map((m) => m.id), ["a", "b", "c"]);
 });
 
+test("older pages prepend without moving or duplicating live messages", () => {
+  const out = mergeWindow([msg("c", "latest c"), msg("d")], win([msg("a"), msg("b"), msg("c"), msg("b")]), true);
+  assert.deepEqual(out.map((m) => m.id), ["a", "b", "c", "d"]);
+  assert.equal(out[2].blocks[0].text, "latest c");
+});
+
+test("a reset received during backward paging replaces the old timeline", () => {
+  assert.deepEqual(mergeWindow([msg("old")], win([msg("new"), msg("new")], { reset: true }), true).map((m) => m.id), ["new"]);
+});
+
+test("backward pagination passes only the opaque before cursor", async () => {
+  let seen;
+  globalThis.fetch = async (url) => { seen = url; return { ok: true, json: async () => win([]) }; };
+  await fetchMessages("t", "codex", "s1", undefined, "opaque/+==");
+  const query = new URL(seen, "http://localhost").searchParams;
+  assert.equal(query.get("before"), "opaque/+==");
+  assert.equal(query.has("after"), false);
+});
+
 /// reset 意味着服务端认定旧游标失效(compact 了、或换了会话)。那时旧内容和新内容
 /// 不是同一条时间线,接在一起会得到一段前后不搭的对话。
 test("reset 是整段替换,不是追加", () => {

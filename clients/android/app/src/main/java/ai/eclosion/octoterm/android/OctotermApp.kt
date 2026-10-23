@@ -237,6 +237,7 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                         chatOpen = state.chatOpen,
                         chatAvailable = state.chatAvailable,
                         onToggleChat = viewModel::toggleChat,
+                        onLoadOlderChat = viewModel::loadOlderChat,
                     )
                 } else {
                     BackHandler(onBack = viewModel::leaveServer)
