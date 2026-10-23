@@ -36,11 +36,11 @@ import ai.eclosion.octoterm.android.launcher.Launchers
 import ai.eclosion.octoterm.android.net.OctoClient
 import ai.eclosion.octoterm.android.push.AgentNotifications
 import ai.eclosion.octoterm.android.push.AgentPush
+import ai.eclosion.octoterm.android.term.AlacrittyTerm
 import ai.eclosion.octoterm.android.term.TermFrame
 import ai.eclosion.octoterm.android.term.AgentKeyLayout
 import ai.eclosion.octoterm.android.term.TermPaintGate
 import ai.eclosion.octoterm.android.term.TermSelection
-import ai.eclosion.octoterm.android.term.VtEmulator
 import ai.eclosion.octoterm.android.wire.AttachMode
 import ai.eclosion.octoterm.android.wire.ClientMsg
 import ai.eclosion.octoterm.android.wire.ServerMsg
@@ -203,7 +203,7 @@ interface ConnectionActions {
     fun openSession(sessionId: Long)
     fun leaveTerminal()
     fun closeOpenSession(id: Long)
-    fun activeEmulator(): VtEmulator?
+    fun activeTerm(): AlacrittyTerm?
     fun sendInput(bytes: ByteArray)
     fun sendInput(sessionId: Long, bytes: ByteArray)
     fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean)
@@ -550,7 +550,7 @@ class ConnectionController(
         next.onChannelData = { channel, payload -> onMain {
             if (client !== next || selectedServerId != connection.id || viewportsSuspended) return@onMain
             val open = opens.values.firstOrNull { it.channel == channel } ?: return@onMain
-            open.emulator.write(payload)
+            open.term.write(payload)
             next.noteData(channel, payload.size)
             if (open.id == activeId && open.paintGate.shouldPublishWrite()) schedulePublish()
         } }
@@ -794,7 +794,7 @@ class ConnectionController(
                 selection = null,
                 scrollOffset = 0,
                 mouseTracking = false,
-                termGeneration = open.emulator.generation,
+                termGeneration = open.term.generation,
             )
         }
         main.removeCallbacks(proposeFlush)
@@ -816,6 +816,7 @@ class ConnectionController(
         if (_state.value.chat.sessionId == id) resetChat()
         client?.detach(open.channel)
         open.paintGate.onDetached()
+        open.term.close()
         if (activeId == id) {
             activeId = opens.keys.lastOrNull()
             if (activeId == null) {
@@ -837,7 +838,7 @@ class ConnectionController(
         }
     }
 
-    override fun activeEmulator(): VtEmulator? = opens[activeId]?.emulator
+    override fun activeTerm(): AlacrittyTerm? = opens[activeId]?.term
 
     override fun sendInput(bytes: ByteArray) {
         sendInput(activeId ?: return, bytes)
@@ -846,7 +847,7 @@ class ConnectionController(
     override fun sendInput(sessionId: Long, bytes: ByteArray) {
         if (_state.value.reconnecting || bytes.isEmpty()) return
         val open = opens[sessionId] ?: return
-        open.emulator.scrollToBottom()
+        open.term.scrollToBottom()
         client?.sendInput(open.channel, bytes)
         _state.update { it.copy(selection = null) }
         publishTerm()
@@ -854,22 +855,22 @@ class ConnectionController(
 
     override fun sendMouse(col: Int, row: Int, pressed: Boolean, moving: Boolean) {
         val open = opens[activeId] ?: return
-        if (open.emulator.scrollOffset != 0) open.emulator.scrollToBottom()
-        val bytes = open.emulator.encodePointer(col, row, button = 0, pressed = pressed, moving = moving) ?: return
+        if (open.term.scrollOffset != 0) open.term.scrollToBottom()
+        val bytes = open.term.encodePointer(col, row, button = 0, pressed = pressed, moving = moving) ?: return
         if (bytes.isEmpty()) return
         client?.sendInput(open.channel, bytes)
     }
 
     override fun scrollBy(delta: Int) {
         val open = opens[activeId] ?: return
-        open.emulator.scrollBy(delta)
+        open.term.scrollBy(delta)
         _state.update { it.copy(selection = null) }
         publishTerm(allowEmpty = true)
     }
 
     override fun jumpToBottom() {
         val open = opens[activeId] ?: return
-        open.emulator.scrollToBottom()
+        open.term.scrollToBottom()
         publishTerm(allowEmpty = true)
     }
 
@@ -880,7 +881,7 @@ class ConnectionController(
     override fun copySelection() {
         val open = opens[activeId] ?: return
         val selection = _state.value.selection ?: return
-        val text = open.emulator.copyViewport(selection.x0, selection.y0, selection.x1, selection.y1)
+        val text = open.term.copyViewport(selection.x0, selection.y0, selection.x1, selection.y1)
         if (text.isEmpty()) return
         val clipboard = app.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText("octoterm", text))
@@ -897,8 +898,8 @@ class ConnectionController(
             ?.toString()
             .orEmpty()
         if (text.isEmpty()) return
-        open.emulator.scrollToBottom()
-        client?.sendInput(open.channel, open.emulator.encodePaste(text))
+        open.term.scrollToBottom()
+        client?.sendInput(open.channel, open.term.encodePaste(text))
         _state.update { it.copy(selection = null) }
         publishTerm()
     }
@@ -1044,16 +1045,16 @@ class ConnectionController(
                     ?.onAttached(replay = msg.mode == AttachMode.Replay)
             }
             is ServerMsg.Resized -> {
-                // 权威几何只改模拟器。提交画面会把「正确重绘」换成裁切后的空/错帧。
+                // 权威几何只改终端网格。提交画面会把「正确重绘」换成裁切后的空/错帧。
                 opens.values.firstOrNull { it.channel == msg.channel }
-                    ?.emulator
+                    ?.term
                     ?.resize(msg.cols, msg.rows)
             }
             is ServerMsg.ResyncBegin -> {
                 val open = opens.values.firstOrNull { it.channel == msg.channel } ?: return
                 open.paintGate.onResyncBegin()
-                open.emulator.reset()
-                open.emulator.setMaxScrollback(_state.value.appearance.scrollback)
+                open.term.reset()
+                open.term.setMaxScrollback(_state.value.appearance.scrollback)
             }
             is ServerMsg.ResyncEnd -> {
                 val open = opens.values.firstOrNull { it.channel == msg.channel } ?: return
@@ -1238,7 +1239,7 @@ class ConnectionController(
 
     private fun publishTerm(allowEmpty: Boolean = false) {
         val open = opens[activeId] ?: return
-        val next = TermFrame.capture(open.emulator)
+        val next = TermFrame.capture(open.term)
         // 服务端重绘以 2J 清屏开头。若清屏被单独提交，正确画面会被空网格盖住。
         // 用户自己翻历史时允许换成另一块（可能更空的）画面。
         if (!allowEmpty && !next.hasContent() && open.painted.hasContent() && next.scrollOffset == open.painted.scrollOffset) {
@@ -1250,9 +1251,9 @@ class ConnectionController(
             it.copy(
                 attachedId = activeId,
                 openSessionIds = opens.keys.toList(),
-                termGeneration = open.emulator.generation,
-                scrollOffset = open.emulator.scrollOffset,
-                mouseTracking = open.emulator.mouseTracking,
+                termGeneration = open.term.generation,
+                scrollOffset = open.term.scrollOffset,
+                mouseTracking = open.term.mouseTracking,
                 selection = if (allowEmpty) null else it.selection,
             )
         }
@@ -1262,6 +1263,7 @@ class ConnectionController(
         for (open in opens.values) {
             client?.detach(open.channel)
             open.paintGate.onDetached()
+            open.term.close()
         }
         opens.clear()
         activeId = null
@@ -1281,7 +1283,7 @@ class ConnectionController(
         followsSystem: Boolean = _state.value.appearanceFollowsSystem,
     ) {
         appearanceStore.save(next, followsSystem)
-        for (open in opens.values) open.emulator.setMaxScrollback(next.scrollback)
+        for (open in opens.values) open.term.setMaxScrollback(next.scrollback)
         _state.update { it.copy(appearance = next, appearanceFollowsSystem = followsSystem) }
         if (activeId != null) publishTerm(allowEmpty = true)
         reportColors()
@@ -1414,7 +1416,7 @@ private class OpenSession(
     val channel: Int,
     scrollback: Int,
 ) {
-    val emulator = VtEmulator(maxScrollback = scrollback)
+    val term = AlacrittyTerm(maxScrollback = scrollback)
     val paintGate = TermPaintGate()
     var painted: TermFrame = TermFrame.Empty
     var pendingAttach: Boolean = true

@@ -204,17 +204,17 @@ fun OctotermApp(viewModel: ConnectionViewModel) {
                 val connection = viewModel.connection(screen.connectionId)
                 if (connection == null) {
                     viewModel.leaveServer()
-                } else if (state.attachedId != null && viewModel.activeEmulator() != null) {
+                } else if (state.attachedId != null && viewModel.activeTerm() != null) {
                     val activeId = state.attachedId
-                    val emulator = viewModel.activeEmulator()
-                    if (activeId == null || emulator == null) {
+                    val term = viewModel.activeTerm()
+                    if (activeId == null || term == null) {
                         viewModel.leaveTerminal()
                     } else TerminalScreen(
                         title = viewModel.attachedSession()?.name ?: connection.title(),
                         activeId = activeId,
                         reconnecting = state.reconnecting,
                         serverOs = state.serverOs,
-                        emulator = emulator,
+                        term = term,
                         frame = viewModel.painted,
                         generation = state.termGeneration,
                         appearance = state.appearance,
