@@ -3,6 +3,7 @@ package ai.eclosion.octoterm.android.connection
 import ai.eclosion.octoterm.android.MainActivity
 import ai.eclosion.octoterm.android.OctotermApplication
 import ai.eclosion.octoterm.android.R
+import ai.eclosion.octoterm.android.agent.AgentState
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -53,7 +54,9 @@ class ConnectionService : Service() {
         controller.restoreDesiredConnections()
         observer?.cancel()
         observer = scope.launch {
-            controller.state.map { it.keepConnectionsInBackground to it.connectionStatuses }.distinctUntilChanged().collect { (keep, statuses) ->
+            controller.state.map {
+                Triple(it.keepConnectionsInBackground, it.connectionStatuses, it.connectedAgentCounts)
+            }.distinctUntilChanged().collect { (keep, statuses, _) ->
                 if (!keep || statuses.values.none { it.active }) {
                     stopSelf()
                 } else {
@@ -65,9 +68,27 @@ class ConnectionService : Service() {
     }
 
     private fun notification(): Notification {
-        val values = controller.state.value.connectionStatuses.values
+        val state = controller.state.value
+        val values = state.connectionStatuses.values
         val connected = values.count { it == ServerConnectionStatus.Connected }
         val connecting = values.count { it == ServerConnectionStatus.Connecting || it == ServerConnectionStatus.Reconnecting }
+        val connections = getString(R.string.connections_notification_summary, connected, connecting)
+        val activity = listOf(AgentState.Working, AgentState.Thinking, AgentState.Waiting, AgentState.Error, AgentState.Idle)
+            .mapNotNull { status ->
+                val count = state.connectedAgentCounts[status] ?: 0
+                if (count <= 0) return@mapNotNull null
+                val label = when (status) {
+                    AgentState.Working -> R.string.agent_state_working
+                    AgentState.Thinking -> R.string.agent_state_thinking
+                    AgentState.Waiting -> R.string.agent_state_waiting
+                    AgentState.Error -> R.string.agent_state_error
+                    AgentState.Idle -> R.string.agent_state_idle
+                    AgentState.Done -> return@mapNotNull null
+                }
+                getString(R.string.connections_notification_agent_count, getString(label), count)
+            }.joinToString(" · ")
+        val agents = activity.takeIf { it.isNotEmpty() }?.let { getString(R.string.connections_notification_agents, it) }
+        val summary = if (agents == null) connections else "$agents · $connections"
         val open = PendingIntent.getActivity(this, 101,
             Intent(this, MainActivity::class.java).setAction(OPEN_CONNECTIONS)
                 .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
@@ -77,7 +98,8 @@ class ConnectionService : Service() {
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(getString(R.string.connections_notification_title))
-            .setContentText(getString(R.string.connections_notification_summary, connected, connecting))
+            .setContentText(summary)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(if (agents == null) connections else "$connections\n$agents"))
             .setContentIntent(open).setOngoing(true).setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE).setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(0, getString(R.string.connections_disconnect_all), stop).build()

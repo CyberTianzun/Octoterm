@@ -144,6 +144,7 @@ data class ConnectionUiState(
     val editor: EditorState = EditorState(),
     val connectingId: String? = null,
     val connectionStatuses: Map<String, ServerConnectionStatus> = emptyMap(),
+    val connectedAgentCounts: Map<AgentState, Int> = emptyMap(),
     val keepConnectionsInBackground: Boolean = true,
     val connectionServiceRunning: Boolean = false,
     val pendingDelete: ServerConnection? = null,
@@ -546,6 +547,7 @@ class ConnectionController(
                 is ServerMsg.AgentEvent -> {
                     link.agentRevision++
                     link.agents = AgentSessions.applyEvent(link.agents, msg.session)
+                    publishAgentActivity()
                     if (msg.session.state != AgentState.Done && link.agents[msg.session.key]?.supportsTranscript == null) refreshAgents(link)
                 }
                 else -> Unit
@@ -611,9 +613,19 @@ class ConnectionController(
 
     private fun publishConnections(persistDesired: Boolean = true) {
         val statuses = links.mapValues { it.value.status }
-        _state.update { it.copy(connectionStatuses = statuses) }
+        val counts = agentActivity()
+        _state.update { it.copy(connectionStatuses = statuses, connectedAgentCounts = counts) }
         if (persistDesired) connectionPreferences.desiredConnections = links.activeIds
         syncConnectionService()
+    }
+
+    private fun agentActivity() = ai.eclosion.octoterm.android.connection.connectedAgentCounts(
+        links.values.map { it.status to it.agents.values },
+    )
+
+    private fun publishAgentActivity() {
+        val counts = agentActivity()
+        _state.update { it.copy(connectedAgentCounts = counts) }
     }
 
     private fun syncConnectionService() {
@@ -1129,6 +1141,7 @@ class ConnectionController(
                 if (!links.isCurrent(link.connection.id, link)) return@launch
                 if (revision != link.agentRevision) { link.agentAgain = true; continue }
                 link.agents = AgentSessions.replaceAll(snapshot.sessions)
+                publishAgentActivity()
                 link.transcriptEnabled = snapshot.transcriptEnabled
                 if (client === link.client && selectedServerId == link.connection.id) {
                     _state.update { it.copy(agents = link.agents, transcriptEnabled = snapshot.transcriptEnabled) }
